@@ -1,0 +1,137 @@
+name: Release
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - cmd/**
+      - docs/**
+      - internal/**
+      - tests/**
+      - go.mod
+      - go.sum
+  push:
+    tags:
+      - v*
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: CLI release tag to publish.
+        required: true
+        default: v0.0.1
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      release_tag: ${{ steps.version.outputs.release_tag }}
+      version: ${{ steps.version.outputs.version }}
+
+    steps:
+      - uses: actions/checkout@v7.0.0
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - id: version
+        name: Resolve release version
+        env:
+          DISPATCH_RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            release_tag="$DISPATCH_RELEASE_TAG"
+          elif [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            release_tag="$GITHUB_REF_NAME"
+          else
+            release_tag="v0.0.0-dev"
+          fi
+          case "$release_tag" in
+            v*) ;;
+            *) printf 'maze CLI release tags must use v*: %s\n' "$release_tag" >&2; exit 1 ;;
+          esac
+          version="${release_tag#v}"
+          printf 'release_tag=%s\n' "$release_tag" >> "$GITHUB_OUTPUT"
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+
+      - name: Test CLI
+        run: go test ./...
+
+      - name: Build archives
+        env:
+          CLI_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          build_date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          ldflags="-s -w -X github.com/packagemaze/maze-cli/internal/version.Version=${CLI_VERSION} -X github.com/packagemaze/maze-cli/internal/version.Commit=${GITHUB_SHA} -X github.com/packagemaze/maze-cli/internal/version.Date=${build_date}"
+
+          for target in linux/amd64 linux/arm64 darwin/arm64; do
+            goos="${target%/*}"
+            goarch="${target#*/}"
+            platform="${goos}_${goarch}"
+            work_dir="$(mktemp -d)"
+            CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build -trimpath -ldflags "$ldflags" -o "${work_dir}/maze" ./cmd/maze
+            tar -C "$work_dir" -czf "dist/maze_${platform}.tar.gz" maze
+            rm -rf "$work_dir"
+          done
+
+          (cd dist && shasum -a 256 maze_*.tar.gz > maze_checksums.txt)
+
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: maze-cli-release-assets
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.ref_type == 'tag' }}
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      attestations: write
+      contents: write
+      id-token: write
+
+    steps:
+      - uses: actions/download-artifact@v8.0.1
+        with:
+          name: maze-cli-release-assets
+          path: dist
+
+      - uses: actions/attest-build-provenance@v4.1.0
+        with:
+          subject-checksums: dist/maze_checksums.txt
+
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.build.outputs.release_tag }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          notes_file="$(mktemp)"
+          cat > "$notes_file" <<EOF
+          PackageMaze maze CLI ${VERSION}
+
+          Assets:
+          - maze_linux_amd64.tar.gz
+          - maze_linux_arm64.tar.gz
+          - maze_darwin_arm64.tar.gz
+          - maze_checksums.txt
+
+          Windows binaries are intentionally deferred.
+          EOF
+
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$RELEASE_TAG" dist/* --target "$GITHUB_SHA" --title "maze ${VERSION}" --notes-file "$notes_file" --repo "$GITHUB_REPOSITORY"
+          fi
