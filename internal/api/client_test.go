@@ -101,6 +101,32 @@ func TestClientExchangeCIStatusErrors(t *testing.T) {
 	}
 }
 
+func TestClientExchangeCIStatusErrorRedactsOIDCToken(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusBadRequest)
+		_, _ = writer.Write([]byte(`{"detail":"echoed oidc-secret in a validation error"}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL+"/v1", server.Client())
+	_, err := client.ExchangeCI(context.Background(), CITokenRequest{
+		Provider:  "github",
+		Feed:      "your-org/npm",
+		Purpose:   "install",
+		Audience:  "https://api.packagemaze.com",
+		OIDCToken: "oidc-secret",
+	})
+	if err == nil {
+		t.Fatal("expected status error")
+	}
+	if strings.Contains(err.Error(), "oidc-secret") {
+		t.Fatalf("OIDC token leaked into error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "[redacted]") {
+		t.Fatalf("expected redacted marker, got %v", err)
+	}
+}
+
 func TestClientExchangeCIMalformedJSON(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		_, _ = writer.Write([]byte(`not json`))

@@ -118,7 +118,7 @@ func (c *Client) ExchangeCI(ctx context.Context, request CITokenRequest) (CIToke
 		return CITokenResponse{}, &StatusError{
 			StatusCode: response.StatusCode,
 			Endpoint:   endpoint,
-			Detail:     responseDetail(response.Body),
+			Detail:     redactSecret(responseDetail(response.Body), request.OIDCToken),
 			Provider:   request.Provider,
 			Feed:       request.Feed,
 			Purpose:    request.Purpose,
@@ -188,4 +188,12 @@ func responseDetail(body io.Reader) string {
 		}
 	}
 	return strings.TrimSpace(string(content))
+}
+
+func redactSecret(value string, secret string) string {
+	secret = strings.TrimSpace(secret)
+	if secret == "" {
+		return value
+	}
+	return strings.ReplaceAll(value, secret, "[redacted]")
 }

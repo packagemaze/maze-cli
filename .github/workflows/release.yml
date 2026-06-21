@@ -13,12 +13,6 @@ on:
   push:
     tags:
       - v*
-  workflow_dispatch:
-    inputs:
-      release_tag:
-        description: CLI release tag to publish.
-        required: true
-        default: v0.0.1
 
 permissions:
   contents: read
@@ -41,13 +35,9 @@ jobs:
 
       - id: version
         name: Resolve release version
-        env:
-          DISPATCH_RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
-          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
-            release_tag="$DISPATCH_RELEASE_TAG"
-          elif [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             release_tag="$GITHUB_REF_NAME"
           else
             release_tag="v0.0.0-dev"
@@ -91,7 +81,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.ref_type == 'tag' }}
+    if: ${{ github.ref_type == 'tag' }}
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 10
