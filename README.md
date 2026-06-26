@@ -127,6 +127,11 @@ The `github-output` format writes the requested Token output plus
 protocol-specific setup and canonical registry URLs without asking workflows to
 duplicate Feed metadata.
 
+The `shell` format writes `MAZE_TOKEN`, `MAZE_TOKEN_EXPIRES_AT`, `MAZE_FEED`,
+`MAZE_FEED_BASE_URL`, `MAZE_PURPOSE`, and `MAZE_ARTIFACT_PROTOCOL` exports for
+wrapper actions that need to consume exchange metadata without using GitHub step
+outputs.
+
 ## GitLab CI/CD
 
 ```yaml

@@ -73,6 +73,15 @@ func TestWriteShell(t *testing.T) {
 	if !strings.Contains(stdout.String(), `export MAZE_TOKEN_EXPIRES_AT='2026-06-08T12:30:00Z'`) {
 		t.Fatalf("stdout = %q", stdout.String())
 	}
+	if !strings.Contains(stdout.String(), `export MAZE_FEED='your-org/npm'`) {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `export MAZE_FEED_BASE_URL='https://pkg.packagemaze.com/your-org/npm'`) {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `export MAZE_ARTIFACT_PROTOCOL='npm'`) {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
 }
 
 func TestWriteGitHubOutputMasksAndWritesOutputFile(t *testing.T) {

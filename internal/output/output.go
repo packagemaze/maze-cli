@@ -108,9 +108,13 @@ func writeJSON(writer io.Writer, result Result) error {
 func writeShell(writer io.Writer, result Result) error {
 	_, err := fmt.Fprintf(
 		writer,
-		"export MAZE_TOKEN=%s\nexport MAZE_TOKEN_EXPIRES_AT=%s\n",
+		"export MAZE_TOKEN=%s\nexport MAZE_TOKEN_EXPIRES_AT=%s\nexport MAZE_FEED=%s\nexport MAZE_FEED_BASE_URL=%s\nexport MAZE_PURPOSE=%s\nexport MAZE_ARTIFACT_PROTOCOL=%s\n",
 		shellQuote(result.Token),
 		shellQuote(result.ExpiresAt.UTC().Format(time.RFC3339)),
+		shellQuote(result.Feed),
+		shellQuote(result.FeedBaseURL),
+		shellQuote(result.Purpose),
+		shellQuote(result.ArtifactProtocol),
 	)
 	return err
 }
