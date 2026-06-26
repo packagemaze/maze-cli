@@ -31,8 +31,10 @@ func TestClientExchangeCISendsRequestAndParsesResponse(t *testing.T) {
 			"expires_at":"2026-06-08T12:30:00Z",
 			"token_type":"Bearer",
 			"feed":"your-org/npm",
+			"feed_base_url":"https://pkg.packagemaze.com/your-org/npm",
 			"purpose":"install",
-			"scopes":["read"]
+			"scopes":["read"],
+			"artifact_protocol":"npm"
 		}`))
 	}))
 	defer server.Close()
@@ -62,6 +64,12 @@ func TestClientExchangeCISendsRequestAndParsesResponse(t *testing.T) {
 	}
 	if strings.Join(response.Scopes, ",") != "read" {
 		t.Fatalf("scopes = %#v", response.Scopes)
+	}
+	if response.ArtifactProtocol != "npm" {
+		t.Fatalf("artifact_protocol = %q", response.ArtifactProtocol)
+	}
+	if response.FeedBaseURL != "https://pkg.packagemaze.com/your-org/npm" {
+		t.Fatalf("feed_base_url = %q", response.FeedBaseURL)
 	}
 }
 

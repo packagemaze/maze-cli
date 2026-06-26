@@ -104,15 +104,18 @@ permissions:
 
 steps:
   - uses: actions/checkout@v4
-  - uses: packagemaze/setup-maze@v0.0.1
   - id: packagemaze
-    run: maze auth exchange-oidc --feed <organization>/<feed> --purpose install --format github-output
+    uses: packagemaze/setup-maze@v0.0.3
+    with:
+      feed: <organization>/<feed>
+      purpose: install
   - run: npm ci
     env:
       NODE_AUTH_TOKEN: ${{ steps.packagemaze.outputs.token }}
 ```
 
-For workflow outputs:
+Use `maze auth exchange-oidc` directly when building wrapper actions or
+troubleshooting token exchange. For workflow outputs:
 
 ```sh
 maze auth exchange-oidc \
@@ -121,6 +124,16 @@ maze auth exchange-oidc \
   --format github-output \
   --output-name package_maze_token
 ```
+
+The `github-output` format writes the requested Token output plus
+`artifact_protocol` and `feed_base_url` so wrapper actions can choose
+protocol-specific setup and canonical registry URLs without asking workflows to
+duplicate Feed metadata.
+
+The `shell` format writes `MAZE_TOKEN`, `MAZE_TOKEN_EXPIRES_AT`, `MAZE_FEED`,
+`MAZE_FEED_BASE_URL`, `MAZE_PURPOSE`, and `MAZE_ARTIFACT_PROTOCOL` exports for
+wrapper actions that need to consume exchange metadata without using GitHub step
+outputs.
 
 ## GitLab CI/CD
 
@@ -167,7 +180,7 @@ printf '%s' "$OIDC_TOKEN" | maze auth exchange-oidc \
 - The PackageMaze Token is printed only through the requested output format.
 - `--verbose` writes non-secret diagnostics to stderr.
 - `github-output` writes to `$GITHUB_OUTPUT` and emits an `add-mask` workflow
-  command.
+  command for the PackageMaze Token.
 - Tokens are not written to project files or persistent config.
 
 ## Production Readiness

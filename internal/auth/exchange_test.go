@@ -56,6 +56,28 @@ func TestResolveValidation(t *testing.T) {
 			config:  Config{Provider: "manual", Feed: "your-org/npm", Purpose: "install", Format: "yaml"},
 			wantErr: "format",
 		},
+		{
+			name: "github output name collides with artifact protocol metadata",
+			config: Config{
+				Provider:   "manual",
+				Feed:       "your-org/npm",
+				Purpose:    "install",
+				Format:     string(output.FormatGitHubOutput),
+				OutputName: "artifact_protocol",
+			},
+			wantErr: "reserved",
+		},
+		{
+			name: "github output name collides with feed base url metadata",
+			config: Config{
+				Provider:   "manual",
+				Feed:       "your-org/npm",
+				Purpose:    "install",
+				Format:     string(output.FormatGitHubOutput),
+				OutputName: "feed_base_url",
+			},
+			wantErr: "reserved",
+		},
 	}
 
 	for _, test := range tests {
@@ -110,6 +132,12 @@ func TestExchangeManualEnvTokenCallsBackend(t *testing.T) {
 	if result.Token != "maze_ci_real" {
 		t.Fatalf("token = %q", result.Token)
 	}
+	if result.ArtifactProtocol != "npm" {
+		t.Fatalf("artifact_protocol = %q", result.ArtifactProtocol)
+	}
+	if result.FeedBaseURL != "https://pkg.packagemaze.com/your-org/npm" {
+		t.Fatalf("feed_base_url = %q", result.FeedBaseURL)
+	}
 }
 
 func TestExchangeGitLabMissingTokenPrintsSnippet(t *testing.T) {
@@ -145,12 +173,14 @@ func (f *recordingExchanger) ExchangeCI(_ context.Context, request api.CITokenRe
 	f.called = true
 	f.request = request
 	return api.CITokenResponse{
-		Token:     "maze_ci_real",
-		ExpiresAt: fixedClock().Add(time.Hour),
-		TokenType: "Bearer",
-		Feed:      request.Feed,
-		Purpose:   request.Purpose,
-		Scopes:    []string{"publish"},
+		Token:            "maze_ci_real",
+		ExpiresAt:        fixedClock().Add(time.Hour),
+		TokenType:        "Bearer",
+		Feed:             request.Feed,
+		FeedBaseURL:      "https://pkg.packagemaze.com/" + request.Feed,
+		Purpose:          request.Purpose,
+		Scopes:           []string{"publish"},
+		ArtifactProtocol: "npm",
 	}, nil
 }
 

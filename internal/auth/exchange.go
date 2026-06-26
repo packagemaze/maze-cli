@@ -102,14 +102,16 @@ func Exchange(ctx context.Context, config Config, deps Dependencies) (output.Res
 		return output.Result{}, ResolvedConfig{}, err
 	}
 	return output.Result{
-		Token:     response.Token,
-		ExpiresAt: response.ExpiresAt,
-		TokenType: response.TokenType,
-		Feed:      fallback(response.Feed, resolved.Feed),
-		Purpose:   fallback(response.Purpose, resolved.Purpose),
-		Package:   packageName,
-		Scopes:    response.Scopes,
-		Provider:  string(resolved.ProviderValue),
+		Token:            response.Token,
+		ExpiresAt:        response.ExpiresAt,
+		TokenType:        response.TokenType,
+		Feed:             fallback(response.Feed, resolved.Feed),
+		FeedBaseURL:      response.FeedBaseURL,
+		Purpose:          fallback(response.Purpose, resolved.Purpose),
+		Package:          packageName,
+		Scopes:           response.Scopes,
+		Provider:         string(resolved.ProviderValue),
+		ArtifactProtocol: response.ArtifactProtocol,
 	}, resolved, nil
 }
 
@@ -192,6 +194,9 @@ func validateResolved(config ResolvedConfig, env ci.LookupEnv) error {
 		if !outputNamePattern.MatchString(config.OutputName) {
 			return fmt.Errorf("--output-name must start with a letter or underscore and contain only letters, numbers, and underscores")
 		}
+		if githubOutputNameReserved(config.OutputName) {
+			return fmt.Errorf("--output-name %s is reserved for PackageMaze metadata outputs", config.OutputName)
+		}
 		_, hasOutput := env("GITHUB_OUTPUT")
 		inGitHubActions := envEqualsTrue(env, "GITHUB_ACTIONS")
 		if !hasOutput {
@@ -202,6 +207,15 @@ func validateResolved(config ResolvedConfig, env ci.LookupEnv) error {
 		}
 	}
 	return nil
+}
+
+func githubOutputNameReserved(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "artifact_protocol", "feed_base_url":
+		return true
+	default:
+		return false
+	}
 }
 
 func resolveProvider(config Config, env ci.LookupEnv) (ci.Provider, error) {
