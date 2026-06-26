@@ -158,6 +158,138 @@ func TestExchangeOIDCAgainstLocalBackendAPI(t *testing.T) {
 	}
 }
 
+func TestExchangeOIDCGitHubOutputAgainstLocalBackendAPI(t *testing.T) {
+	t.Parallel()
+
+	const oidcToken = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJwYWNrYWdlbWF6ZSJ9.signature"
+	const packageMazeToken = "maze_ci_01K8GITHUBOUTPUT"
+
+	requests := make(chan tokenExchangeRequest, 1)
+	backendErrors := make(chan string, 1)
+	recordBackendError := func(writer http.ResponseWriter, format string, args ...any) {
+		message := fmt.Sprintf(format, args...)
+		select {
+		case backendErrors <- message:
+		default:
+		}
+		http.Error(writer, message, http.StatusInternalServerError)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodPost {
+			recordBackendError(writer, "method = %s, want POST", request.Method)
+			return
+		}
+		if request.URL.Path != "/v1/auth/ci-token" {
+			recordBackendError(writer, "path = %s, want /v1/auth/ci-token", request.URL.Path)
+			return
+		}
+
+		var payload tokenExchangeRequest
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			recordBackendError(writer, "decode request: %v", err)
+			return
+		}
+		requests <- payload
+
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{
+			"token": "` + packageMazeToken + `",
+			"expires_at": "2026-06-09T16:30:00Z",
+			"token_type": "Bearer",
+			"feed": "your-org/npm",
+			"feed_base_url": "https://pkg.packagemaze.com/your-org/npm",
+			"purpose": "docker-build",
+			"scopes": ["read"],
+			"artifact_protocol": "npm"
+		}`))
+	}))
+	defer server.Close()
+
+	outputPath := filepath.Join(t.TempDir(), "github-output")
+	cliDir := packageMazeCLIDir(t)
+	command := exec.Command(
+		"go",
+		"-C",
+		cliDir,
+		"run",
+		"./cmd/maze",
+		"auth",
+		"exchange-oidc",
+		"--base-url",
+		server.URL,
+		"--api-url",
+		server.URL+"/v1",
+		"--allow-insecure-localhost",
+		"--provider",
+		"manual",
+		"--feed",
+		"your-org/npm",
+		"--purpose",
+		"docker-build",
+		"--format",
+		"github-output",
+		"--output-name",
+		"package_token",
+	)
+	command.Env = append(os.Environ(),
+		"GITHUB_ACTIONS=true",
+		"GITHUB_OUTPUT="+outputPath,
+		"MAZE_OIDC_TOKEN="+oidcToken,
+	)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+
+	if err := command.Run(); err != nil {
+		t.Fatalf("command failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+	}
+	select {
+	case message := <-backendErrors:
+		t.Fatalf("test backend rejected request: %s", message)
+	default:
+	}
+
+	select {
+	case payload := <-requests:
+		if payload.Provider != "manual" {
+			t.Fatalf("provider = %q", payload.Provider)
+		}
+		if payload.Feed != "your-org/npm" {
+			t.Fatalf("feed = %q", payload.Feed)
+		}
+		if payload.Purpose != "docker-build" {
+			t.Fatalf("purpose = %q", payload.Purpose)
+		}
+		if payload.OIDCToken != oidcToken {
+			t.Fatalf("oidc_token was not forwarded to backend")
+		}
+	default:
+		t.Fatalf("test backend did not receive token exchange request")
+	}
+
+	if stderr.String() != "" {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+	if stdout.String() != "::add-mask::"+packageMazeToken+"\n" {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+	outputFile, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read GITHUB_OUTPUT: %v", err)
+	}
+	want := "package_token=" + packageMazeToken + "\n" +
+		"artifact_protocol=npm\n" +
+		"feed_base_url=https://pkg.packagemaze.com/your-org/npm\n"
+	if string(outputFile) != want {
+		t.Fatalf("GITHUB_OUTPUT = %q, want %q", string(outputFile), want)
+	}
+	if strings.Contains(stderr.String(), packageMazeToken) {
+		t.Fatalf("token leaked into stderr")
+	}
+}
+
 type tokenExchangeRequest struct {
 	Provider  string  `json:"provider"`
 	Feed      string  `json:"feed"`
