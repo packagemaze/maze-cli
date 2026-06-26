@@ -126,21 +126,25 @@ func writeGitHubOutput(writer io.Writer, result Result, outputName string, outpu
 	if strings.TrimSpace(outputName) == "" {
 		outputName = "token"
 	}
+	outputs := []gitHubOutputValue{{name: outputName, value: result.Token}}
+	if strings.TrimSpace(result.ArtifactProtocol) != "" {
+		outputs = append(outputs, gitHubOutputValue{name: "artifact_protocol", value: result.ArtifactProtocol})
+	}
+	if strings.TrimSpace(result.FeedBaseURL) != "" {
+		outputs = append(outputs, gitHubOutputValue{name: "feed_base_url", value: result.FeedBaseURL})
+	}
+	for _, output := range outputs {
+		if err := validateGitHubOutputValue(output.name, output.value); err != nil {
+			return err
+		}
+	}
 	file, err := os.OpenFile(outputPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return fmt.Errorf("open GITHUB_OUTPUT: %w", err)
 	}
 	defer file.Close()
-	if err := writeGitHubOutputValue(file, outputName, result.Token); err != nil {
-		return fmt.Errorf("write GITHUB_OUTPUT: %w", err)
-	}
-	if strings.TrimSpace(result.ArtifactProtocol) != "" {
-		if err := writeGitHubOutputValue(file, "artifact_protocol", result.ArtifactProtocol); err != nil {
-			return fmt.Errorf("write GITHUB_OUTPUT: %w", err)
-		}
-	}
-	if strings.TrimSpace(result.FeedBaseURL) != "" {
-		if err := writeGitHubOutputValue(file, "feed_base_url", result.FeedBaseURL); err != nil {
+	for _, output := range outputs {
+		if err := writeGitHubOutputValue(file, output.name, output.value); err != nil {
 			return fmt.Errorf("write GITHUB_OUTPUT: %w", err)
 		}
 	}
@@ -148,17 +152,29 @@ func writeGitHubOutput(writer io.Writer, result Result, outputName string, outpu
 	return err
 }
 
+type gitHubOutputValue struct {
+	name  string
+	value string
+}
+
 func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }
 
 func writeGitHubOutputValue(writer io.Writer, name string, value string) error {
+	if err := validateGitHubOutputValue(name, value); err != nil {
+		return err
+	}
+	_, err := fmt.Fprintf(writer, "%s=%s\n", name, value)
+	return err
+}
+
+func validateGitHubOutputValue(name string, value string) error {
 	if strings.TrimSpace(name) == "" || strings.ContainsAny(name, "=\r\n") {
 		return fmt.Errorf("invalid GitHub output name")
 	}
 	if strings.ContainsAny(value, "\r\n") {
 		return fmt.Errorf("GitHub output %s contains a newline", name)
 	}
-	_, err := fmt.Fprintf(writer, "%s=%s\n", name, value)
-	return err
+	return nil
 }

@@ -117,11 +117,22 @@ func TestWriteGitHubOutputRequiresOutputPath(t *testing.T) {
 func TestWriteGitHubOutputRejectsUnsafeOutputValues(t *testing.T) {
 	result := testResult()
 	result.FeedBaseURL = "https://pkg.packagemaze.com/your-org/npm\nmalicious=value"
+	outputPath := filepath.Join(t.TempDir(), "github-output")
+	if err := os.WriteFile(outputPath, nil, 0o600); err != nil {
+		t.Fatalf("create output file: %v", err)
+	}
 	err := Write(result, WriteConfig{
 		Format:           FormatGitHubOutput,
-		GitHubOutputPath: filepath.Join(t.TempDir(), "github-output"),
+		GitHubOutputPath: outputPath,
 	})
 	if err == nil || !strings.Contains(err.Error(), "contains a newline") {
 		t.Fatalf("expected newline error, got %v", err)
+	}
+	content, readErr := os.ReadFile(outputPath)
+	if readErr != nil {
+		t.Fatalf("read output file: %v", readErr)
+	}
+	if len(content) != 0 {
+		t.Fatalf("output file = %q, want empty", string(content))
 	}
 }
