@@ -194,6 +194,9 @@ func validateResolved(config ResolvedConfig, env ci.LookupEnv) error {
 		if !outputNamePattern.MatchString(config.OutputName) {
 			return fmt.Errorf("--output-name must start with a letter or underscore and contain only letters, numbers, and underscores")
 		}
+		if githubOutputNameReserved(config.OutputName) {
+			return fmt.Errorf("--output-name %s is reserved for PackageMaze metadata outputs", config.OutputName)
+		}
 		_, hasOutput := env("GITHUB_OUTPUT")
 		inGitHubActions := envEqualsTrue(env, "GITHUB_ACTIONS")
 		if !hasOutput {
@@ -204,6 +207,15 @@ func validateResolved(config ResolvedConfig, env ci.LookupEnv) error {
 		}
 	}
 	return nil
+}
+
+func githubOutputNameReserved(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "artifact_protocol", "feed_base_url":
+		return true
+	default:
+		return false
+	}
 }
 
 func resolveProvider(config Config, env ci.LookupEnv) (ci.Provider, error) {

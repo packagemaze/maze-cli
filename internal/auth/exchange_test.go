@@ -56,6 +56,28 @@ func TestResolveValidation(t *testing.T) {
 			config:  Config{Provider: "manual", Feed: "your-org/npm", Purpose: "install", Format: "yaml"},
 			wantErr: "format",
 		},
+		{
+			name: "github output name collides with artifact protocol metadata",
+			config: Config{
+				Provider:   "manual",
+				Feed:       "your-org/npm",
+				Purpose:    "install",
+				Format:     string(output.FormatGitHubOutput),
+				OutputName: "artifact_protocol",
+			},
+			wantErr: "reserved",
+		},
+		{
+			name: "github output name collides with feed base url metadata",
+			config: Config{
+				Provider:   "manual",
+				Feed:       "your-org/npm",
+				Purpose:    "install",
+				Format:     string(output.FormatGitHubOutput),
+				OutputName: "feed_base_url",
+			},
+			wantErr: "reserved",
+		},
 	}
 
 	for _, test := range tests {

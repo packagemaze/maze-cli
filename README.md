@@ -104,7 +104,7 @@ permissions:
 
 steps:
   - uses: actions/checkout@v4
-  - uses: packagemaze/setup-maze@v0.0.1
+  - uses: packagemaze/setup-maze@v0.0.3
   - id: packagemaze
     run: maze auth exchange-oidc --feed <organization>/<feed> --purpose install --format github-output
   - run: npm ci
