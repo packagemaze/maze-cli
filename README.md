@@ -104,15 +104,18 @@ permissions:
 
 steps:
   - uses: actions/checkout@v4
-  - uses: packagemaze/setup-maze@v0.0.3
   - id: packagemaze
-    run: maze auth exchange-oidc --feed <organization>/<feed> --purpose install --format github-output
+    uses: packagemaze/setup-maze@v0.0.3
+    with:
+      feed: <organization>/<feed>
+      purpose: install
   - run: npm ci
     env:
       NODE_AUTH_TOKEN: ${{ steps.packagemaze.outputs.token }}
 ```
 
-For workflow outputs:
+Use `maze auth exchange-oidc` directly when building wrapper actions or
+troubleshooting token exchange. For workflow outputs:
 
 ```sh
 maze auth exchange-oidc \
