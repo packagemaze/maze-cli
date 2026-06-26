@@ -12,13 +12,14 @@ import (
 
 func testResult() Result {
 	return Result{
-		Token:     "maze_ci_secret",
-		ExpiresAt: time.Date(2026, 6, 8, 12, 30, 0, 0, time.UTC),
-		TokenType: "Bearer",
-		Feed:      "your-org/npm",
-		Purpose:   "install",
-		Scopes:    []string{"read"},
-		Provider:  "github",
+		Token:            "maze_ci_secret",
+		ExpiresAt:        time.Date(2026, 6, 8, 12, 30, 0, 0, time.UTC),
+		TokenType:        "Bearer",
+		Feed:             "your-org/npm",
+		Purpose:          "install",
+		Scopes:           []string{"read"},
+		Provider:         "github",
+		ArtifactProtocol: "npm",
 	}
 }
 
@@ -49,6 +50,9 @@ func TestWriteJSON(t *testing.T) {
 	}
 	if payload["provider"] != "github" {
 		t.Fatalf("provider = %v", payload["provider"])
+	}
+	if payload["artifact_protocol"] != "npm" {
+		t.Fatalf("artifact_protocol = %v", payload["artifact_protocol"])
 	}
 }
 
@@ -82,7 +86,7 @@ func TestWriteGitHubOutputMasksAndWritesOutputFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read output file: %v", err)
 	}
-	if string(content) != "package_token=maze_ci_secret\n" {
+	if string(content) != "package_token=maze_ci_secret\nartifact_protocol=npm\n" {
 		t.Fatalf("output file = %q", string(content))
 	}
 	if stdout.String() != "::add-mask::maze_ci_secret\n" {

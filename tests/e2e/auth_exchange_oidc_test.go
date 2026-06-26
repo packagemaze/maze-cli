@@ -57,7 +57,8 @@ func TestExchangeOIDCAgainstLocalBackendAPI(t *testing.T) {
 			"token_type": "Bearer",
 			"feed": "your-org/npm",
 			"purpose": "install",
-			"scopes": ["read"]
+			"scopes": ["read"],
+			"artifact_protocol": "npm"
 		}`))
 	}))
 	defer server.Close()
@@ -145,6 +146,9 @@ func TestExchangeOIDCAgainstLocalBackendAPI(t *testing.T) {
 	if output.Provider != "manual" {
 		t.Fatalf("provider = %q", output.Provider)
 	}
+	if output.ArtifactProtocol != "npm" {
+		t.Fatalf("artifact_protocol = %q", output.ArtifactProtocol)
+	}
 	if strings.Join(output.Scopes, ",") != "read" {
 		t.Fatalf("scopes = %#v", output.Scopes)
 	}
@@ -160,10 +164,11 @@ type tokenExchangeRequest struct {
 }
 
 type tokenExchangeOutput struct {
-	Token     string   `json:"token"`
-	ExpiresAt string   `json:"expires_at"`
-	Provider  string   `json:"provider"`
-	Scopes    []string `json:"scopes"`
+	Token            string   `json:"token"`
+	ExpiresAt        string   `json:"expires_at"`
+	Provider         string   `json:"provider"`
+	Scopes           []string `json:"scopes"`
+	ArtifactProtocol string   `json:"artifact_protocol"`
 }
 
 func packageMazeCLIDir(t *testing.T) string {

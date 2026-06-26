@@ -19,14 +19,15 @@ const (
 )
 
 type Result struct {
-	Token     string
-	ExpiresAt time.Time
-	TokenType string
-	Feed      string
-	Purpose   string
-	Package   string
-	Scopes    []string
-	Provider  string
+	Token            string
+	ExpiresAt        time.Time
+	TokenType        string
+	Feed             string
+	Purpose          string
+	Package          string
+	Scopes           []string
+	Provider         string
+	ArtifactProtocol string
 }
 
 type WriteConfig struct {
@@ -76,23 +77,25 @@ func Write(result Result, config WriteConfig) error {
 
 func writeJSON(writer io.Writer, result Result) error {
 	payload := struct {
-		Token     string   `json:"token"`
-		ExpiresAt string   `json:"expires_at"`
-		TokenType string   `json:"token_type"`
-		Feed      string   `json:"feed"`
-		Purpose   string   `json:"purpose"`
-		Package   string   `json:"package,omitempty"`
-		Scopes    []string `json:"scopes"`
-		Provider  string   `json:"provider"`
+		Token            string   `json:"token"`
+		ExpiresAt        string   `json:"expires_at"`
+		TokenType        string   `json:"token_type"`
+		Feed             string   `json:"feed"`
+		Purpose          string   `json:"purpose"`
+		Package          string   `json:"package,omitempty"`
+		Scopes           []string `json:"scopes"`
+		Provider         string   `json:"provider"`
+		ArtifactProtocol string   `json:"artifact_protocol,omitempty"`
 	}{
-		Token:     result.Token,
-		ExpiresAt: result.ExpiresAt.UTC().Format(time.RFC3339),
-		TokenType: result.TokenType,
-		Feed:      result.Feed,
-		Purpose:   result.Purpose,
-		Package:   result.Package,
-		Scopes:    result.Scopes,
-		Provider:  result.Provider,
+		Token:            result.Token,
+		ExpiresAt:        result.ExpiresAt.UTC().Format(time.RFC3339),
+		TokenType:        result.TokenType,
+		Feed:             result.Feed,
+		Purpose:          result.Purpose,
+		Package:          result.Package,
+		Scopes:           result.Scopes,
+		Provider:         result.Provider,
+		ArtifactProtocol: result.ArtifactProtocol,
 	}
 	encoder := json.NewEncoder(writer)
 	encoder.SetIndent("", "  ")
@@ -123,6 +126,11 @@ func writeGitHubOutput(writer io.Writer, result Result, outputName string, outpu
 	defer file.Close()
 	if _, err := fmt.Fprintf(file, "%s=%s\n", outputName, result.Token); err != nil {
 		return fmt.Errorf("write GITHUB_OUTPUT: %w", err)
+	}
+	if strings.TrimSpace(result.ArtifactProtocol) != "" {
+		if _, err := fmt.Fprintf(file, "artifact_protocol=%s\n", result.ArtifactProtocol); err != nil {
+			return fmt.Errorf("write GITHUB_OUTPUT: %w", err)
+		}
 	}
 	_, err = fmt.Fprintf(writer, "::add-mask::%s\n", result.Token)
 	return err

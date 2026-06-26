@@ -102,14 +102,15 @@ func Exchange(ctx context.Context, config Config, deps Dependencies) (output.Res
 		return output.Result{}, ResolvedConfig{}, err
 	}
 	return output.Result{
-		Token:     response.Token,
-		ExpiresAt: response.ExpiresAt,
-		TokenType: response.TokenType,
-		Feed:      fallback(response.Feed, resolved.Feed),
-		Purpose:   fallback(response.Purpose, resolved.Purpose),
-		Package:   packageName,
-		Scopes:    response.Scopes,
-		Provider:  string(resolved.ProviderValue),
+		Token:            response.Token,
+		ExpiresAt:        response.ExpiresAt,
+		TokenType:        response.TokenType,
+		Feed:             fallback(response.Feed, resolved.Feed),
+		Purpose:          fallback(response.Purpose, resolved.Purpose),
+		Package:          packageName,
+		Scopes:           response.Scopes,
+		Provider:         string(resolved.ProviderValue),
+		ArtifactProtocol: response.ArtifactProtocol,
 	}, resolved, nil
 }
 

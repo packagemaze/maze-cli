@@ -110,6 +110,9 @@ func TestExchangeManualEnvTokenCallsBackend(t *testing.T) {
 	if result.Token != "maze_ci_real" {
 		t.Fatalf("token = %q", result.Token)
 	}
+	if result.ArtifactProtocol != "npm" {
+		t.Fatalf("artifact_protocol = %q", result.ArtifactProtocol)
+	}
 }
 
 func TestExchangeGitLabMissingTokenPrintsSnippet(t *testing.T) {
@@ -145,12 +148,13 @@ func (f *recordingExchanger) ExchangeCI(_ context.Context, request api.CITokenRe
 	f.called = true
 	f.request = request
 	return api.CITokenResponse{
-		Token:     "maze_ci_real",
-		ExpiresAt: fixedClock().Add(time.Hour),
-		TokenType: "Bearer",
-		Feed:      request.Feed,
-		Purpose:   request.Purpose,
-		Scopes:    []string{"publish"},
+		Token:            "maze_ci_real",
+		ExpiresAt:        fixedClock().Add(time.Hour),
+		TokenType:        "Bearer",
+		Feed:             request.Feed,
+		Purpose:          request.Purpose,
+		Scopes:           []string{"publish"},
+		ArtifactProtocol: "npm",
 	}, nil
 }
 

@@ -122,6 +122,10 @@ maze auth exchange-oidc \
   --output-name package_maze_token
 ```
 
+The `github-output` format writes the requested Token output and also writes
+`artifact_protocol` so wrapper actions can choose protocol-specific setup
+without asking workflows to duplicate Feed metadata.
+
 ## GitLab CI/CD
 
 ```yaml
@@ -167,7 +171,7 @@ printf '%s' "$OIDC_TOKEN" | maze auth exchange-oidc \
 - The PackageMaze Token is printed only through the requested output format.
 - `--verbose` writes non-secret diagnostics to stderr.
 - `github-output` writes to `$GITHUB_OUTPUT` and emits an `add-mask` workflow
-  command.
+  command for the PackageMaze Token.
 - Tokens are not written to project files or persistent config.
 
 ## Production Readiness

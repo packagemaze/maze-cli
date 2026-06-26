@@ -29,12 +29,13 @@ type CITokenRequest struct {
 }
 
 type CITokenResponse struct {
-	Token     string
-	ExpiresAt time.Time
-	TokenType string
-	Feed      string
-	Purpose   string
-	Scopes    []string
+	Token            string
+	ExpiresAt        time.Time
+	TokenType        string
+	Feed             string
+	Purpose          string
+	Scopes           []string
+	ArtifactProtocol string
 }
 
 type StatusError struct {
@@ -126,12 +127,13 @@ func (c *Client) ExchangeCI(ctx context.Context, request CITokenRequest) (CIToke
 	}
 
 	var payload struct {
-		Token     string   `json:"token"`
-		ExpiresAt string   `json:"expires_at"`
-		TokenType string   `json:"token_type"`
-		Feed      string   `json:"feed"`
-		Purpose   string   `json:"purpose"`
-		Scopes    []string `json:"scopes"`
+		Token            string   `json:"token"`
+		ExpiresAt        string   `json:"expires_at"`
+		TokenType        string   `json:"token_type"`
+		Feed             string   `json:"feed"`
+		Purpose          string   `json:"purpose"`
+		Scopes           []string `json:"scopes"`
+		ArtifactProtocol string   `json:"artifact_protocol"`
 	}
 	if err := json.NewDecoder(io.LimitReader(response.Body, 1024*1024)).Decode(&payload); err != nil {
 		return CITokenResponse{}, &MalformedResponseError{Endpoint: endpoint, Err: err}
@@ -156,12 +158,13 @@ func (c *Client) ExchangeCI(ctx context.Context, request CITokenRequest) (CIToke
 		payload.Scopes = []string{}
 	}
 	return CITokenResponse{
-		Token:     payload.Token,
-		ExpiresAt: expiresAt,
-		TokenType: payload.TokenType,
-		Feed:      payload.Feed,
-		Purpose:   payload.Purpose,
-		Scopes:    payload.Scopes,
+		Token:            payload.Token,
+		ExpiresAt:        expiresAt,
+		TokenType:        payload.TokenType,
+		Feed:             payload.Feed,
+		Purpose:          payload.Purpose,
+		Scopes:           payload.Scopes,
+		ArtifactProtocol: payload.ArtifactProtocol,
 	}, nil
 }
 
