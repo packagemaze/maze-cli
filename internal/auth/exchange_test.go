@@ -113,6 +113,9 @@ func TestExchangeManualEnvTokenCallsBackend(t *testing.T) {
 	if result.ArtifactProtocol != "npm" {
 		t.Fatalf("artifact_protocol = %q", result.ArtifactProtocol)
 	}
+	if result.FeedBaseURL != "https://pkg.packagemaze.com/your-org/npm" {
+		t.Fatalf("feed_base_url = %q", result.FeedBaseURL)
+	}
 }
 
 func TestExchangeGitLabMissingTokenPrintsSnippet(t *testing.T) {
@@ -152,6 +155,7 @@ func (f *recordingExchanger) ExchangeCI(_ context.Context, request api.CITokenRe
 		ExpiresAt:        fixedClock().Add(time.Hour),
 		TokenType:        "Bearer",
 		Feed:             request.Feed,
+		FeedBaseURL:      "https://pkg.packagemaze.com/" + request.Feed,
 		Purpose:          request.Purpose,
 		Scopes:           []string{"publish"},
 		ArtifactProtocol: "npm",

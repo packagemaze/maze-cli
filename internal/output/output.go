@@ -23,6 +23,7 @@ type Result struct {
 	ExpiresAt        time.Time
 	TokenType        string
 	Feed             string
+	FeedBaseURL      string
 	Purpose          string
 	Package          string
 	Scopes           []string
@@ -81,6 +82,7 @@ func writeJSON(writer io.Writer, result Result) error {
 		ExpiresAt        string   `json:"expires_at"`
 		TokenType        string   `json:"token_type"`
 		Feed             string   `json:"feed"`
+		FeedBaseURL      string   `json:"feed_base_url,omitempty"`
 		Purpose          string   `json:"purpose"`
 		Package          string   `json:"package,omitempty"`
 		Scopes           []string `json:"scopes"`
@@ -91,6 +93,7 @@ func writeJSON(writer io.Writer, result Result) error {
 		ExpiresAt:        result.ExpiresAt.UTC().Format(time.RFC3339),
 		TokenType:        result.TokenType,
 		Feed:             result.Feed,
+		FeedBaseURL:      result.FeedBaseURL,
 		Purpose:          result.Purpose,
 		Package:          result.Package,
 		Scopes:           result.Scopes,
@@ -124,11 +127,16 @@ func writeGitHubOutput(writer io.Writer, result Result, outputName string, outpu
 		return fmt.Errorf("open GITHUB_OUTPUT: %w", err)
 	}
 	defer file.Close()
-	if _, err := fmt.Fprintf(file, "%s=%s\n", outputName, result.Token); err != nil {
+	if err := writeGitHubOutputValue(file, outputName, result.Token); err != nil {
 		return fmt.Errorf("write GITHUB_OUTPUT: %w", err)
 	}
 	if strings.TrimSpace(result.ArtifactProtocol) != "" {
-		if _, err := fmt.Fprintf(file, "artifact_protocol=%s\n", result.ArtifactProtocol); err != nil {
+		if err := writeGitHubOutputValue(file, "artifact_protocol", result.ArtifactProtocol); err != nil {
+			return fmt.Errorf("write GITHUB_OUTPUT: %w", err)
+		}
+	}
+	if strings.TrimSpace(result.FeedBaseURL) != "" {
+		if err := writeGitHubOutputValue(file, "feed_base_url", result.FeedBaseURL); err != nil {
 			return fmt.Errorf("write GITHUB_OUTPUT: %w", err)
 		}
 	}
@@ -138,4 +146,15 @@ func writeGitHubOutput(writer io.Writer, result Result, outputName string, outpu
 
 func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
+}
+
+func writeGitHubOutputValue(writer io.Writer, name string, value string) error {
+	if strings.TrimSpace(name) == "" || strings.ContainsAny(name, "=\r\n") {
+		return fmt.Errorf("invalid GitHub output name")
+	}
+	if strings.ContainsAny(value, "\r\n") {
+		return fmt.Errorf("GitHub output %s contains a newline", name)
+	}
+	_, err := fmt.Fprintf(writer, "%s=%s\n", name, value)
+	return err
 }

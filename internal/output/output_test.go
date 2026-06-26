@@ -16,6 +16,7 @@ func testResult() Result {
 		ExpiresAt:        time.Date(2026, 6, 8, 12, 30, 0, 0, time.UTC),
 		TokenType:        "Bearer",
 		Feed:             "your-org/npm",
+		FeedBaseURL:      "https://pkg.packagemaze.com/your-org/npm",
 		Purpose:          "install",
 		Scopes:           []string{"read"},
 		Provider:         "github",
@@ -54,6 +55,9 @@ func TestWriteJSON(t *testing.T) {
 	if payload["artifact_protocol"] != "npm" {
 		t.Fatalf("artifact_protocol = %v", payload["artifact_protocol"])
 	}
+	if payload["feed_base_url"] != "https://pkg.packagemaze.com/your-org/npm" {
+		t.Fatalf("feed_base_url = %v", payload["feed_base_url"])
+	}
 }
 
 func TestWriteShell(t *testing.T) {
@@ -86,7 +90,7 @@ func TestWriteGitHubOutputMasksAndWritesOutputFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read output file: %v", err)
 	}
-	if string(content) != "package_token=maze_ci_secret\nartifact_protocol=npm\n" {
+	if string(content) != "package_token=maze_ci_secret\nartifact_protocol=npm\nfeed_base_url=https://pkg.packagemaze.com/your-org/npm\n" {
 		t.Fatalf("output file = %q", string(content))
 	}
 	if stdout.String() != "::add-mask::maze_ci_secret\n" {
@@ -98,5 +102,17 @@ func TestWriteGitHubOutputRequiresOutputPath(t *testing.T) {
 	err := Write(testResult(), WriteConfig{Format: FormatGitHubOutput})
 	if err == nil || !strings.Contains(err.Error(), "GITHUB_OUTPUT") {
 		t.Fatalf("expected GITHUB_OUTPUT error, got %v", err)
+	}
+}
+
+func TestWriteGitHubOutputRejectsUnsafeOutputValues(t *testing.T) {
+	result := testResult()
+	result.FeedBaseURL = "https://pkg.packagemaze.com/your-org/npm\nmalicious=value"
+	err := Write(result, WriteConfig{
+		Format:           FormatGitHubOutput,
+		GitHubOutputPath: filepath.Join(t.TempDir(), "github-output"),
+	})
+	if err == nil || !strings.Contains(err.Error(), "contains a newline") {
+		t.Fatalf("expected newline error, got %v", err)
 	}
 }

@@ -106,6 +106,7 @@ func Exchange(ctx context.Context, config Config, deps Dependencies) (output.Res
 		ExpiresAt:        response.ExpiresAt,
 		TokenType:        response.TokenType,
 		Feed:             fallback(response.Feed, resolved.Feed),
+		FeedBaseURL:      response.FeedBaseURL,
 		Purpose:          fallback(response.Purpose, resolved.Purpose),
 		Package:          packageName,
 		Scopes:           response.Scopes,

@@ -33,6 +33,7 @@ type CITokenResponse struct {
 	ExpiresAt        time.Time
 	TokenType        string
 	Feed             string
+	FeedBaseURL      string
 	Purpose          string
 	Scopes           []string
 	ArtifactProtocol string
@@ -131,6 +132,7 @@ func (c *Client) ExchangeCI(ctx context.Context, request CITokenRequest) (CIToke
 		ExpiresAt        string   `json:"expires_at"`
 		TokenType        string   `json:"token_type"`
 		Feed             string   `json:"feed"`
+		FeedBaseURL      string   `json:"feed_base_url"`
 		Purpose          string   `json:"purpose"`
 		Scopes           []string `json:"scopes"`
 		ArtifactProtocol string   `json:"artifact_protocol"`
@@ -162,6 +164,7 @@ func (c *Client) ExchangeCI(ctx context.Context, request CITokenRequest) (CIToke
 		ExpiresAt:        expiresAt,
 		TokenType:        payload.TokenType,
 		Feed:             payload.Feed,
+		FeedBaseURL:      payload.FeedBaseURL,
 		Purpose:          payload.Purpose,
 		Scopes:           payload.Scopes,
 		ArtifactProtocol: payload.ArtifactProtocol,

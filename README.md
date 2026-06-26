@@ -122,9 +122,10 @@ maze auth exchange-oidc \
   --output-name package_maze_token
 ```
 
-The `github-output` format writes the requested Token output and also writes
-`artifact_protocol` so wrapper actions can choose protocol-specific setup
-without asking workflows to duplicate Feed metadata.
+The `github-output` format writes the requested Token output plus
+`artifact_protocol` and `feed_base_url` so wrapper actions can choose
+protocol-specific setup and canonical registry URLs without asking workflows to
+duplicate Feed metadata.
 
 ## GitLab CI/CD
 

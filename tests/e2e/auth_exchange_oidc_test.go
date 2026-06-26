@@ -56,6 +56,7 @@ func TestExchangeOIDCAgainstLocalBackendAPI(t *testing.T) {
 			"expires_at": "2026-06-09T16:30:00Z",
 			"token_type": "Bearer",
 			"feed": "your-org/npm",
+			"feed_base_url": "https://pkg.packagemaze.com/your-org/npm",
 			"purpose": "install",
 			"scopes": ["read"],
 			"artifact_protocol": "npm"
@@ -149,6 +150,9 @@ func TestExchangeOIDCAgainstLocalBackendAPI(t *testing.T) {
 	if output.ArtifactProtocol != "npm" {
 		t.Fatalf("artifact_protocol = %q", output.ArtifactProtocol)
 	}
+	if output.FeedBaseURL != "https://pkg.packagemaze.com/your-org/npm" {
+		t.Fatalf("feed_base_url = %q", output.FeedBaseURL)
+	}
 	if strings.Join(output.Scopes, ",") != "read" {
 		t.Fatalf("scopes = %#v", output.Scopes)
 	}
@@ -169,6 +173,7 @@ type tokenExchangeOutput struct {
 	Provider         string   `json:"provider"`
 	Scopes           []string `json:"scopes"`
 	ArtifactProtocol string   `json:"artifact_protocol"`
+	FeedBaseURL      string   `json:"feed_base_url"`
 }
 
 func packageMazeCLIDir(t *testing.T) string {
