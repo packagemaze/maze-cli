@@ -8,11 +8,14 @@ The first implemented command is:
 
 ```sh
 maze auth exchange-oidc
+maze publish dist/* --feed <organization>/<feed>
 ```
 
-It exchanges a CI OIDC identity token for a short-lived PackageMaze Token. The
-command always runs the same exchange flow; local and staging development use
-the normal `--base-url` or `--api-url` endpoint overrides.
+`maze auth exchange-oidc` exchanges a CI OIDC identity token for a short-lived
+PackageMaze Token. `maze publish` sends local artifact facts to PackageMaze,
+executes the returned backend plan, uploads bytes, and waits for Publish
+Finalization by default. Local and staging development use the normal endpoint
+overrides.
 
 ## Build And Test
 
@@ -37,6 +40,7 @@ Useful development commands:
 go run ./cmd/maze --help
 go run ./cmd/maze version
 MAZE_OIDC_TOKEN="$OIDC_TOKEN" go run ./cmd/maze auth exchange-oidc --provider manual --feed <organization>/<feed> --purpose install
+MAZE_TOKEN="$PACKAGE_MAZE_TOKEN" go run ./cmd/maze publish dist/* --feed <organization>/<feed>
 ```
 
 ## API Contract
@@ -94,6 +98,32 @@ printf '%s' "$OIDC_TOKEN" | maze auth exchange-oidc \
   --purpose install \
   --format json
 ```
+
+## Publish
+
+```sh
+maze publish dist/* --feed <organization>/<feed>
+maze publish ./package-1.0.0.tgz --feed <organization>/<feed> --json
+```
+
+`maze publish` is a generic executor for PackageMaze Publish Sessions. It
+computes filename, byte size, SHA-256, and content type for each path, asks the
+Feed for a versioned publish plan, uploads through the instructed direct R2
+multipart target, reports completion, and waits for the backend status contract.
+PackageMaze owns npm and PyPI package/version decisions.
+
+Authentication uses a PackageMaze Token with publish scope:
+
+- `MAZE_TOKEN`
+- `--token-file <path>`
+- `--token-stdin`
+
+Useful flags:
+
+- `--package-client-url <url>` for local or staging Package Client Domain tests
+- `--package <name>` and `--version <version>` as optional backend hints
+- `--wait=false` to return after upload completion
+- `--json` or `--format json` for CI-safe structured output
 
 ## GitHub Actions
 
