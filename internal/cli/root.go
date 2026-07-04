@@ -8,6 +8,7 @@ import (
 
 	"github.com/packagemaze/maze-cli/internal/auth"
 	"github.com/packagemaze/maze-cli/internal/output"
+	publishcmd "github.com/packagemaze/maze-cli/internal/publish"
 	"github.com/packagemaze/maze-cli/internal/version"
 )
 
@@ -16,6 +17,10 @@ func DefaultDependencies() auth.Dependencies {
 }
 
 func NewRootCommand(deps auth.Dependencies) *cobra.Command {
+	return NewRootCommandWithPublishDependencies(deps, publishcmd.Dependencies{})
+}
+
+func NewRootCommandWithPublishDependencies(deps auth.Dependencies, publishDeps publishcmd.Dependencies) *cobra.Command {
 	root := &cobra.Command{
 		Use:           "maze",
 		Short:         "PackageMaze command line interface",
@@ -24,6 +29,7 @@ func NewRootCommand(deps auth.Dependencies) *cobra.Command {
 	}
 	root.AddCommand(newVersionCommand())
 	root.AddCommand(newAuthCommand(deps))
+	root.AddCommand(newPublishCommand(deps, publishDeps))
 	return root
 }
 
@@ -104,5 +110,56 @@ func newExchangeOIDCCommand(deps auth.Dependencies) *cobra.Command {
 	_ = flags.MarkHidden("allow-github-output-outside-actions")
 	_ = command.MarkFlagRequired("feed")
 	_ = command.MarkFlagRequired("purpose")
+	return command
+}
+
+func newPublishCommand(authDeps auth.Dependencies, publishDeps publishcmd.Dependencies) *cobra.Command {
+	config := publishcmd.Config{Wait: true}
+	command := &cobra.Command{
+		Use:   "publish [paths...] --feed <organization/feed>",
+		Short: "Publish artifacts to a PackageMaze Feed",
+		Long:  "Publish artifacts by asking PackageMaze for a backend-steered plan, uploading bytes, and waiting for Publish Finalization.",
+		Example: "  maze publish dist/* --feed your-org/your-feed\n" +
+			"  maze publish ./package-1.0.0.tgz --feed your-org/your-feed --json",
+		Args: cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			runDeps := publishDeps
+			if runDeps.Env == nil {
+				runDeps.Env = authDeps.Env
+			}
+			if runDeps.Env == nil {
+				runDeps.Env = auth.DefaultDependencies().Env
+			}
+			if runDeps.Stdin == nil {
+				runDeps.Stdin = cmd.InOrStdin()
+			}
+			if runDeps.HTTPClient == nil {
+				runDeps.HTTPClient = authDeps.HTTPClient
+			}
+			result, resolved, err := publishcmd.Run(cmd.Context(), config, args, runDeps, cmd.ErrOrStderr())
+			if err != nil {
+				if result.PublishSessionID != "" && resolved.FormatValue == publishcmd.FormatJSON {
+					_ = publishcmd.Write(result, resolved.FormatValue, cmd.OutOrStdout())
+				}
+				return err
+			}
+			return publishcmd.Write(result, resolved.FormatValue, cmd.OutOrStdout())
+		},
+	}
+	flags := command.Flags()
+	flags.StringVar(&config.PackageClientURL, "package-client-url", "", "PackageMaze Package Client Domain base URL (default: MAZE_PACKAGE_CLIENT_URL, else https://pkg.packagemaze.com)")
+	flags.StringVar(&config.Feed, "feed", "", "PackageMaze Feed in org/feed form")
+	flags.StringVar(&config.TokenEnv, "token-env", publishcmd.DefaultTokenEnv, "Environment variable containing a PackageMaze Token")
+	flags.StringVar(&config.TokenFile, "token-file", "", "File containing a PackageMaze Token")
+	flags.BoolVar(&config.StdinToken, "token-stdin", false, "Read the PackageMaze Token from stdin")
+	flags.StringVar(&config.PackageHint, "package", "", "Optional package name hint for backend planning")
+	flags.StringVar(&config.VersionHint, "version", "", "Optional package version hint for backend planning")
+	flags.BoolVar(&config.Wait, "wait", true, "Wait until PackageMaze reports ready or error")
+	flags.StringVar(&config.Format, "format", string(publishcmd.FormatText), "Output format: text or json")
+	flags.BoolVar(&config.JSONAlias, "json", false, "Alias for --format json")
+	flags.DurationVar(&config.Timeout, "timeout", 30*time.Second, "HTTP timeout")
+	flags.BoolVar(&config.Verbose, "verbose", false, "Print non-secret diagnostics to stderr")
+	flags.BoolVar(&config.AllowInsecureLocalhost, "allow-insecure-localhost", false, "Allow http URLs only for localhost development")
+	_ = command.MarkFlagRequired("feed")
 	return command
 }

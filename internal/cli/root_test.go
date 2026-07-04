@@ -4,12 +4,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/packagemaze/maze-cli/internal/api"
 	"github.com/packagemaze/maze-cli/internal/auth"
+	publishcmd "github.com/packagemaze/maze-cli/internal/publish"
 )
 
 func TestExchangeOIDCCommandTokenOutput(t *testing.T) {
@@ -105,6 +109,51 @@ func TestExchangeOIDCJSONAliasConflictsWithFormat(t *testing.T) {
 	}
 }
 
+func TestPublishCommandJSON(t *testing.T) {
+	artifactPath := filepath.Join(t.TempDir(), "large-package-1.0.0.tgz")
+	if err := os.WriteFile(artifactPath, []byte("artifact bytes"), 0o600); err != nil {
+		t.Fatalf("write artifact: %v", err)
+	}
+	client := &recordingPublishClient{}
+	client.createResponse = publishCreateResponse(artifactPath)
+	client.statusResponse = publishStatusResponse(client.createResponse)
+	uploader := &recordingUploader{
+		result: publishcmd.UploadResult{PartCount: 1, R2UploadID: "r2-upload-1"},
+	}
+	stdout, stderr, err := runCommandWithPublishDeps(
+		auth.Dependencies{},
+		publishcmd.Dependencies{
+			Client:   client,
+			Env:      mapLookup(map[string]string{"MAZE_TOKEN": "pm_publish_token"}),
+			Sleep:    func(context.Context, time.Duration) error { return nil },
+			Uploader: uploader,
+		},
+		"publish",
+		artifactPath,
+		"--feed", "your-org/npm",
+		"--json",
+	)
+	if err != nil {
+		t.Fatalf("command returned error: %v\nstderr: %s", err, stderr)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
+		t.Fatalf("stdout was not JSON: %v\n%s", err, stdout)
+	}
+	if payload["publish_session_id"] != "pubsession_cli" {
+		t.Fatalf("publish_session_id = %v", payload["publish_session_id"])
+	}
+	if client.createToken != "pm_publish_token" {
+		t.Fatalf("token = %q", client.createToken)
+	}
+	if uploader.path != artifactPath {
+		t.Fatalf("uploaded path = %q", uploader.path)
+	}
+	if strings.Contains(stdout+stderr, "pm_publish_token") {
+		t.Fatalf("token leaked into output")
+	}
+}
+
 func TestVersionCommand(t *testing.T) {
 	stdout, _, err := runCommand("version")
 	if err != nil {
@@ -120,9 +169,13 @@ func runCommand(args ...string) (string, string, error) {
 }
 
 func runCommandWithDeps(deps auth.Dependencies, args ...string) (string, string, error) {
+	return runCommandWithPublishDeps(deps, publishcmd.Dependencies{}, args...)
+}
+
+func runCommandWithPublishDeps(deps auth.Dependencies, publishDeps publishcmd.Dependencies, args ...string) (string, string, error) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	command := NewRootCommand(deps)
+	command := NewRootCommandWithPublishDependencies(deps, publishDeps)
 	command.SetOut(&stdout)
 	command.SetErr(&stderr)
 	command.SetArgs(args)
@@ -153,4 +206,79 @@ func mapLookup(values map[string]string) func(string) (string, bool) {
 		value, ok := values[key]
 		return value, ok
 	}
+}
+
+type recordingPublishClient struct {
+	createResponse publishcmd.CreatePublishSessionResponse
+	createToken    string
+	statusResponse publishcmd.PublishSessionStatusResponse
+}
+
+func (r *recordingPublishClient) CreateSession(_ context.Context, _ string, token string, _ publishcmd.CreatePublishSessionRequest) (publishcmd.CreatePublishSessionResponse, error) {
+	r.createToken = token
+	return r.createResponse, nil
+}
+
+func (r *recordingPublishClient) CompleteUpload(context.Context, string, publishcmd.CompletionInstruction, publishcmd.UploadResult) error {
+	return nil
+}
+
+func (r *recordingPublishClient) GetStatus(context.Context, string, string) (publishcmd.PublishSessionStatusResponse, error) {
+	return r.statusResponse, nil
+}
+
+type recordingUploader struct {
+	path   string
+	result publishcmd.UploadResult
+}
+
+func (r *recordingUploader) Upload(_ context.Context, _ publishcmd.PlannedArtifact, path string, _ io.Writer) (publishcmd.UploadResult, error) {
+	r.path = path
+	return r.result, nil
+}
+
+func publishCreateResponse(path string) publishcmd.CreatePublishSessionResponse {
+	var response publishcmd.CreatePublishSessionResponse
+	response.SchemaVersion = 1
+	response.PublishSession.ID = "pubsession_cli"
+	response.PublishSession.State = "planned"
+	response.PublishSession.ArtifactProtocol = "npm"
+	response.Plan.Kind = "package_publish_plan"
+	response.Plan.SchemaVersion = 1
+	response.Plan.Wait.URL = "https://pkg.packagemaze.com/your-org/npm/-/packagemaze/v1/publish-sessions/pubsession_cli"
+	response.Plan.Wait.IntervalSeconds = 1
+	response.Plan.Wait.TimeoutSeconds = 30
+	var artifact publishcmd.PlannedArtifact
+	artifact.Artifact.Filename = filepath.Base(path)
+	artifact.Artifact.SizeBytes = int64(len("artifact bytes"))
+	artifact.Artifact.SHA256 = strings.Repeat("a", 64)
+	artifact.Artifact.ContentType = "application/octet-stream"
+	artifact.Completion.Method = "POST"
+	artifact.Completion.URL = "https://pkg.packagemaze.com/your-org/npm/-/packagemaze/v1/upload-sessions/uploadsession_cli/complete"
+	artifact.Package.Name = "large-package"
+	artifact.Package.Version = "1.0.0"
+	artifact.Upload.Kind = "r2_multipart_upload_v1"
+	artifact.Upload.PartSizeBytes = 5 * 1024 * 1024
+	artifact.Upload.UploadSessionID = "uploadsession_cli"
+	response.Plan.Artifacts = []publishcmd.PlannedArtifact{artifact}
+	return response
+}
+
+func publishStatusResponse(create publishcmd.CreatePublishSessionResponse) publishcmd.PublishSessionStatusResponse {
+	var response publishcmd.PublishSessionStatusResponse
+	response.SchemaVersion = 1
+	response.PublishSession.ID = create.PublishSession.ID
+	response.PublishSession.State = "ready"
+	for _, planned := range create.Plan.Artifacts {
+		status := publishcmd.ArtifactStatus{
+			Artifact: planned.Artifact,
+			State:    "ready",
+		}
+		status.Package.Name = planned.Package.Name
+		status.Package.Version = planned.Package.Version
+		status.UploadSession.ID = planned.Upload.UploadSessionID
+		status.UploadSession.State = "ready"
+		response.Artifacts = append(response.Artifacts, status)
+	}
+	return response
 }
