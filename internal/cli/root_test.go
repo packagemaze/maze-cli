@@ -259,6 +259,13 @@ func publishCreateResponse(path string) publishcmd.CreatePublishSessionResponse 
 	artifact.Package.Version = "1.0.0"
 	artifact.Upload.Kind = "r2_multipart_upload_v1"
 	artifact.Upload.PartSizeBytes = 5 * 1024 * 1024
+	artifact.Upload.Target.Bucket = "packagemaze-artifacts"
+	artifact.Upload.Target.Credentials.AccessKeyID = "r2-temp-access-key"
+	artifact.Upload.Target.Credentials.SecretAccessKey = "r2-temp-secret-key"
+	artifact.Upload.Target.Credentials.SessionToken = "r2-temp-session-token"
+	artifact.Upload.Target.Endpoint = "https://example.r2.cloudflarestorage.com"
+	artifact.Upload.Target.ObjectKey = "uploads/object"
+	artifact.Upload.Target.Region = "auto"
 	artifact.Upload.UploadSessionID = "uploadsession_cli"
 	response.Plan.Artifacts = []publishcmd.PlannedArtifact{artifact}
 	return response

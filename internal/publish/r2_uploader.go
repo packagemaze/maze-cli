@@ -20,8 +20,8 @@ func NewR2MultipartUploader() *R2MultipartUploader {
 }
 
 func (u *R2MultipartUploader) Upload(ctx context.Context, artifact PlannedArtifact, path string, progress io.Writer) (UploadResult, error) {
-	if artifact.Upload.PartSizeBytes <= 0 {
-		return UploadResult{}, fmt.Errorf("PackageMaze publish plan part size is invalid")
+	if err := validateR2UploadPlan(artifact); err != nil {
+		return UploadResult{}, err
 	}
 	client := s3.New(s3.Options{
 		BaseEndpoint: aws.String(artifact.Upload.Target.Endpoint),

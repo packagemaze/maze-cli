@@ -25,6 +25,9 @@ import (
 const (
 	DefaultPackageClientURL = "https://pkg.packagemaze.com"
 	DefaultTokenEnv         = "MAZE_TOKEN"
+	maxR2MultipartParts     = 10_000
+	maxR2PartSizeBytes      = 64 * 1024 * 1024
+	minR2PartSizeBytes      = 5 * 1024 * 1024
 )
 
 var feedPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$`)
@@ -291,7 +294,7 @@ func Run(ctx context.Context, config Config, paths []string, deps Dependencies, 
 	if err != nil {
 		return Result{}, ResolvedConfig{}, err
 	}
-	if err := validatePlan(session); err != nil {
+	if err := validatePlan(session, resolved); err != nil {
 		return Result{}, ResolvedConfig{}, err
 	}
 	if len(session.Plan.Artifacts) != len(paths) {
@@ -500,23 +503,110 @@ func waitForStatus(ctx context.Context, client Client, token string, wait WaitIn
 	}
 }
 
-func validatePlan(response CreatePublishSessionResponse) error {
+func validatePlan(response CreatePublishSessionResponse, config ResolvedConfig) error {
 	if response.SchemaVersion != 1 || response.Plan.SchemaVersion != 1 {
 		return fmt.Errorf("PackageMaze publish plan version is unsupported")
 	}
 	if response.Plan.Kind != "package_publish_plan" {
 		return fmt.Errorf("PackageMaze publish plan kind is unsupported")
 	}
+	if strings.TrimSpace(response.Plan.Wait.URL) != "" {
+		if err := validatePackageMazePlanURL("status", config, response.Plan.Wait.URL, "publish-sessions", ""); err != nil {
+			return err
+		}
+	}
 	for _, artifact := range response.Plan.Artifacts {
 		if artifact.Upload.Kind != "r2_multipart_upload_v1" {
 			return fmt.Errorf("PackageMaze publish plan upload kind is unsupported")
 		}
+		if err := validateR2UploadPlan(artifact); err != nil {
+			return err
+		}
 		if artifact.Completion.Method != http.MethodPost {
 			return fmt.Errorf("PackageMaze publish plan completion method is unsupported")
 		}
-		if strings.TrimSpace(artifact.Completion.URL) == "" {
-			return fmt.Errorf("PackageMaze publish plan completion URL is missing")
+		if err := validatePackageMazePlanURL("completion", config, artifact.Completion.URL, "upload-sessions", "/complete"); err != nil {
+			return err
 		}
+	}
+	return nil
+}
+
+func validatePackageMazePlanURL(label string, config ResolvedConfig, value string, collection string, suffix string) error {
+	if strings.TrimSpace(value) == "" {
+		return fmt.Errorf("PackageMaze publish plan %s URL is missing", label)
+	}
+	if err := validateURL("publish-plan-"+label+"-url", value, config.AllowInsecureLocalhost); err != nil {
+		return err
+	}
+	base, err := url.Parse(config.PackageClientURL)
+	if err != nil {
+		return fmt.Errorf("PackageMaze package client URL is invalid")
+	}
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return fmt.Errorf("PackageMaze publish plan %s URL is invalid", label)
+	}
+	if parsed.User != nil || parsed.Fragment != "" || parsed.RawQuery != "" {
+		return fmt.Errorf("PackageMaze publish plan %s URL is outside the expected PackageMaze control route", label)
+	}
+	if !sameOrigin(base, parsed) {
+		return fmt.Errorf("PackageMaze publish plan %s URL must stay on the configured PackageMaze origin", label)
+	}
+	org, feed, ok := strings.Cut(config.Feed, "/")
+	if !ok {
+		return fmt.Errorf("--feed must be in org/feed form")
+	}
+	expectedPrefix := "/" + url.PathEscape(org) + "/" + url.PathEscape(feed) + "/-/packagemaze/v1/" + collection + "/"
+	if !strings.HasPrefix(parsed.EscapedPath(), expectedPrefix) || !strings.HasSuffix(parsed.EscapedPath(), suffix) {
+		return fmt.Errorf("PackageMaze publish plan %s URL is outside the expected PackageMaze control route", label)
+	}
+	return nil
+}
+
+func validateR2UploadPlan(artifact PlannedArtifact) error {
+	if err := validateR2Endpoint(artifact.Upload.Target.Endpoint); err != nil {
+		return err
+	}
+	if strings.TrimSpace(artifact.Upload.Target.Bucket) == "" {
+		return fmt.Errorf("PackageMaze publish plan R2 bucket is missing")
+	}
+	if strings.TrimSpace(artifact.Upload.Target.ObjectKey) == "" {
+		return fmt.Errorf("PackageMaze publish plan R2 object key is missing")
+	}
+	credentials := artifact.Upload.Target.Credentials
+	if strings.TrimSpace(credentials.AccessKeyID) == "" ||
+		strings.TrimSpace(credentials.SecretAccessKey) == "" ||
+		strings.TrimSpace(credentials.SessionToken) == "" {
+		return fmt.Errorf("PackageMaze publish plan R2 credentials are incomplete")
+	}
+	partSize := artifact.Upload.PartSizeBytes
+	if partSize < minR2PartSizeBytes || partSize > maxR2PartSizeBytes {
+		return fmt.Errorf("PackageMaze publish plan part size is outside the supported R2 multipart range")
+	}
+	if artifact.Artifact.SizeBytes < 0 {
+		return fmt.Errorf("PackageMaze publish plan artifact size is invalid")
+	}
+	if artifact.Artifact.SizeBytes > 0 {
+		partCount := (artifact.Artifact.SizeBytes + partSize - 1) / partSize
+		if partCount > maxR2MultipartParts {
+			return fmt.Errorf("PackageMaze publish plan would exceed the R2 multipart part limit")
+		}
+	}
+	return nil
+}
+
+func validateR2Endpoint(value string) error {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
+		return fmt.Errorf("PackageMaze publish plan R2 endpoint must be an HTTPS URL")
+	}
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || strings.Trim(parsed.Path, "/") != "" {
+		return fmt.Errorf("PackageMaze publish plan R2 endpoint must not include credentials, paths, queries, or fragments")
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if !strings.HasSuffix(host, ".r2.cloudflarestorage.com") {
+		return fmt.Errorf("PackageMaze publish plan R2 endpoint must be a Cloudflare R2 S3 endpoint")
 	}
 	return nil
 }
@@ -702,6 +792,9 @@ func (c *HTTPClient) CompleteUpload(ctx context.Context, token string, completio
 	if err := validateURL("publish-plan-completion-url", completion.URL, c.allowInsecureLocalhost); err != nil {
 		return err
 	}
+	if err := validateSameOriginPlanURL("completion", c.baseURL, completion.URL); err != nil {
+		return err
+	}
 	return c.doJSON(ctx, http.MethodPost, completion.URL, token, map[string]any{
 		"part_count":   upload.PartCount,
 		"r2_upload_id": upload.R2UploadID,
@@ -712,11 +805,33 @@ func (c *HTTPClient) GetStatus(ctx context.Context, token string, statusURL stri
 	if err := validateURL("publish-plan-status-url", statusURL, c.allowInsecureLocalhost); err != nil {
 		return PublishSessionStatusResponse{}, err
 	}
+	if err := validateSameOriginPlanURL("status", c.baseURL, statusURL); err != nil {
+		return PublishSessionStatusResponse{}, err
+	}
 	var response PublishSessionStatusResponse
 	if err := c.doJSON(ctx, http.MethodGet, statusURL, token, nil, http.StatusOK, &response); err != nil {
 		return PublishSessionStatusResponse{}, err
 	}
 	return response, nil
+}
+
+func validateSameOriginPlanURL(label string, baseURL string, value string) error {
+	base, err := url.Parse(baseURL)
+	if err != nil {
+		return fmt.Errorf("PackageMaze package client URL is invalid")
+	}
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return fmt.Errorf("PackageMaze publish plan %s URL is invalid", label)
+	}
+	if !sameOrigin(base, parsed) {
+		return fmt.Errorf("PackageMaze publish plan %s URL must stay on the configured PackageMaze origin", label)
+	}
+	return nil
+}
+
+func sameOrigin(left *url.URL, right *url.URL) bool {
+	return strings.EqualFold(left.Scheme, right.Scheme) && strings.EqualFold(left.Host, right.Host)
 }
 
 func (c *HTTPClient) publishSessionEndpoint(feed string) (string, error) {

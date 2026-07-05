@@ -135,6 +135,113 @@ func TestRunReturnsBackendErrorStatusWithResult(t *testing.T) {
 	}
 }
 
+func TestRunRejectsPlanCompletionURLOutsidePackageMazeOrigin(t *testing.T) {
+	path := writeTempArtifact(t, "large-package-1.0.0.tgz", "artifact bytes")
+	client := &fakeClient{}
+	client.createResponse = createResponseForFacts(t, "pubsession_123", []ArtifactFact{
+		factForPath(t, path),
+	})
+	client.createResponse.Plan.Artifacts[0].Completion.URL = "https://attacker.example/upload-sessions/uploadsession_123/complete"
+	uploader := &fakeUploader{result: UploadResult{PartCount: 1, R2UploadID: "r2-upload-123"}}
+
+	_, _, err := Run(
+		context.Background(),
+		Config{Feed: "your-org/npm", TokenEnv: DefaultTokenEnv, Wait: true},
+		[]string{path},
+		Dependencies{
+			Client:   client,
+			Env:      mapLookup(map[string]string{DefaultTokenEnv: "pm_publish_token"}),
+			Uploader: uploader,
+		},
+		nil,
+	)
+
+	if err == nil || !strings.Contains(err.Error(), "configured PackageMaze origin") {
+		t.Fatalf("expected origin rejection, got %v", err)
+	}
+	if uploader.path != "" {
+		t.Fatalf("uploader was called for rejected plan: %q", uploader.path)
+	}
+	if len(client.completed) != 0 {
+		t.Fatalf("completion sent for rejected plan: %#v", client.completed)
+	}
+}
+
+func TestRunRejectsPlanStatusURLOutsidePackageMazeControlRoute(t *testing.T) {
+	path := writeTempArtifact(t, "large-package-1.0.0.tgz", "artifact bytes")
+	client := &fakeClient{}
+	client.createResponse = createResponseForFacts(t, "pubsession_123", []ArtifactFact{
+		factForPath(t, path),
+	})
+	client.createResponse.Plan.Wait.URL = "https://pkg.packagemaze.com/your-org/npm/-/other/v1/publish-sessions/pubsession_123"
+
+	_, _, err := Run(
+		context.Background(),
+		Config{Feed: "your-org/npm", TokenEnv: DefaultTokenEnv, Wait: true},
+		[]string{path},
+		Dependencies{
+			Client:   client,
+			Env:      mapLookup(map[string]string{DefaultTokenEnv: "pm_publish_token"}),
+			Uploader: &fakeUploader{result: UploadResult{PartCount: 1, R2UploadID: "r2-upload-123"}},
+		},
+		nil,
+	)
+
+	if err == nil || !strings.Contains(err.Error(), "expected PackageMaze control route") {
+		t.Fatalf("expected control route rejection, got %v", err)
+	}
+}
+
+func TestRunRejectsUnsafeR2UploadPlan(t *testing.T) {
+	path := writeTempArtifact(t, "large-package-1.0.0.tgz", "artifact bytes")
+	client := &fakeClient{}
+	client.createResponse = createResponseForFacts(t, "pubsession_123", []ArtifactFact{
+		factForPath(t, path),
+	})
+	client.createResponse.Plan.Artifacts[0].Upload.Target.Endpoint = "https://storage.attacker.example"
+
+	_, _, err := Run(
+		context.Background(),
+		Config{Feed: "your-org/npm", TokenEnv: DefaultTokenEnv, Wait: true},
+		[]string{path},
+		Dependencies{
+			Client:   client,
+			Env:      mapLookup(map[string]string{DefaultTokenEnv: "pm_publish_token"}),
+			Uploader: &fakeUploader{result: UploadResult{PartCount: 1, R2UploadID: "r2-upload-123"}},
+		},
+		nil,
+	)
+
+	if err == nil || !strings.Contains(err.Error(), "Cloudflare R2 S3 endpoint") {
+		t.Fatalf("expected R2 endpoint rejection, got %v", err)
+	}
+}
+
+func TestRunRejectsOversizedR2PartSize(t *testing.T) {
+	path := writeTempArtifact(t, "large-package-1.0.0.tgz", "artifact bytes")
+	client := &fakeClient{}
+	client.createResponse = createResponseForFacts(t, "pubsession_123", []ArtifactFact{
+		factForPath(t, path),
+	})
+	client.createResponse.Plan.Artifacts[0].Upload.PartSizeBytes = maxR2PartSizeBytes + 1
+
+	_, _, err := Run(
+		context.Background(),
+		Config{Feed: "your-org/npm", TokenEnv: DefaultTokenEnv, Wait: true},
+		[]string{path},
+		Dependencies{
+			Client:   client,
+			Env:      mapLookup(map[string]string{DefaultTokenEnv: "pm_publish_token"}),
+			Uploader: &fakeUploader{result: UploadResult{PartCount: 1, R2UploadID: "r2-upload-123"}},
+		},
+		nil,
+	)
+
+	if err == nil || !strings.Contains(err.Error(), "part size") {
+		t.Fatalf("expected R2 part size rejection, got %v", err)
+	}
+}
+
 func TestWriteJSONOmitsSecrets(t *testing.T) {
 	result := Result{
 		ArtifactProtocol: "npm",
@@ -187,6 +294,9 @@ func createResponseForFacts(t *testing.T, sessionID string, facts []ArtifactFact
 		artifact.Upload.PartSizeBytes = 5 * 1024 * 1024
 		artifact.Upload.Target.Bucket = "packagemaze-artifacts"
 		artifact.Upload.Target.Endpoint = "https://example.r2.cloudflarestorage.com"
+		artifact.Upload.Target.Credentials.AccessKeyID = "r2-temp-access-key"
+		artifact.Upload.Target.Credentials.SecretAccessKey = "r2-temp-secret-key"
+		artifact.Upload.Target.Credentials.SessionToken = "r2-temp-session-token"
 		artifact.Upload.Target.ObjectKey = "uploads/object"
 		artifact.Upload.Target.Region = "auto"
 		artifact.Upload.UploadSessionID = "uploadsession_123"
