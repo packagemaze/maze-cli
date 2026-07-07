@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 )
 
@@ -78,6 +79,153 @@ func DetectProvider(env LookupEnv) (Provider, bool, error) {
 		return "", true, fmt.Errorf("multiple CI providers were detected (%s); pass --provider to choose one", strings.Join(names, ", "))
 	}
 	return detected[0], true, nil
+}
+
+func ClientContext(provider Provider, env LookupEnv) map[string]any {
+	if env == nil {
+		env = DefaultLookupEnv
+	}
+	ciContext := map[string]any{}
+	switch provider {
+	case ProviderCircleCI:
+		addEnv(ciContext, env, "branch", "CIRCLE_BRANCH")
+		addEnv(ciContext, env, "build_num", "CIRCLE_BUILD_NUM")
+		addEnv(ciContext, env, "build_url", "CIRCLE_BUILD_URL")
+		addEnv(ciContext, env, "job", "CIRCLE_JOB")
+		addEnv(ciContext, env, "organization_id", "CIRCLE_ORGANIZATION_ID")
+		addEnv(ciContext, env, "pipeline_id", "CIRCLE_PIPELINE_ID")
+		addEnv(ciContext, env, "project_id", "CIRCLE_PROJECT_ID")
+		addEnv(ciContext, env, "project_reponame", "CIRCLE_PROJECT_REPONAME")
+		addEnv(ciContext, env, "project_username", "CIRCLE_PROJECT_USERNAME")
+		addEnv(ciContext, env, "pull_request_url", "CIRCLE_PULL_REQUEST")
+		addEnvList(ciContext, env, "pull_requests", "CIRCLE_PULL_REQUESTS")
+		addEnv(ciContext, env, "repository_url", "CIRCLE_REPOSITORY_URL")
+		addEnv(ciContext, env, "sha", "CIRCLE_SHA1")
+		addEnv(ciContext, env, "workflow_id", "CIRCLE_WORKFLOW_ID")
+		addEnv(ciContext, env, "workflow_job_id", "CIRCLE_WORKFLOW_JOB_ID")
+	case ProviderGitHub:
+		addEnv(ciContext, env, "event_name", "GITHUB_EVENT_NAME")
+		addEnv(ciContext, env, "head_ref", "GITHUB_HEAD_REF")
+		addEnv(ciContext, env, "ref", "GITHUB_REF")
+		addEnv(ciContext, env, "ref_name", "GITHUB_REF_NAME")
+		addEnv(ciContext, env, "ref_type", "GITHUB_REF_TYPE")
+		addEnv(ciContext, env, "repository", "GITHUB_REPOSITORY")
+		addEnv(ciContext, env, "run_attempt", "GITHUB_RUN_ATTEMPT")
+		addEnv(ciContext, env, "run_id", "GITHUB_RUN_ID")
+		addEnv(ciContext, env, "sha", "GITHUB_SHA")
+		addEnv(ciContext, env, "workflow", "GITHUB_WORKFLOW")
+		addEnv(ciContext, env, "workflow_ref", "GITHUB_WORKFLOW_REF")
+		addGitHubURLs(ciContext, env)
+		addGitHubPullRequestEvent(ciContext, env)
+	case ProviderAuto, ProviderGitLab, ProviderManual:
+	}
+	if len(ciContext) == 0 {
+		return nil
+	}
+	return map[string]any{"ci": ciContext}
+}
+
+func addEnv(context map[string]any, env LookupEnv, key string, envName string) {
+	value, ok := env(envName)
+	value = strings.TrimSpace(value)
+	if ok && value != "" {
+		context[key] = value
+	}
+}
+
+func addEnvList(context map[string]any, env LookupEnv, key string, envName string) {
+	value, ok := env(envName)
+	value = strings.TrimSpace(value)
+	if !ok || value == "" {
+		return
+	}
+	parts := strings.Split(value, ",")
+	values := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed != "" {
+			values = append(values, trimmed)
+		}
+	}
+	if len(values) > 0 {
+		context[key] = values
+	}
+}
+
+func addGitHubURLs(context map[string]any, env LookupEnv) {
+	serverURL, ok := env("GITHUB_SERVER_URL")
+	if !ok || strings.TrimSpace(serverURL) == "" {
+		serverURL = "https://github.com"
+	}
+	repository, hasRepository := env("GITHUB_REPOSITORY")
+	repository = strings.Trim(strings.TrimSpace(repository), "/")
+	if !hasRepository || repository == "" {
+		return
+	}
+	repositoryURL := strings.TrimRight(strings.TrimSpace(serverURL), "/") + "/" + repository
+	context["repository_url"] = repositoryURL
+	if runID, ok := env("GITHUB_RUN_ID"); ok && strings.TrimSpace(runID) != "" {
+		runURL := repositoryURL + "/actions/runs/" + strings.TrimSpace(runID)
+		if attempt, ok := env("GITHUB_RUN_ATTEMPT"); ok && strings.TrimSpace(attempt) != "" && strings.TrimSpace(attempt) != "1" {
+			runURL += "/attempts/" + strings.TrimSpace(attempt)
+		}
+		context["run_url"] = runURL
+	}
+	ref, ok := env("GITHUB_REF")
+	if ok {
+		if number := pullRequestNumberFromGitHubRef(ref); number != "" {
+			context["pull_request_number"] = number
+			context["pull_request_url"] = repositoryURL + "/pull/" + number
+		}
+	}
+}
+
+func addGitHubPullRequestEvent(context map[string]any, env LookupEnv) {
+	eventPath, ok := env("GITHUB_EVENT_PATH")
+	if !ok || strings.TrimSpace(eventPath) == "" {
+		return
+	}
+	content, err := os.ReadFile(strings.TrimSpace(eventPath))
+	if err != nil {
+		return
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(io.LimitReader(strings.NewReader(string(content)), 1024*1024)).Decode(&payload); err != nil {
+		return
+	}
+	pullRequest, ok := payload["pull_request"].(map[string]any)
+	if !ok {
+		return
+	}
+	if title, ok := pullRequest["title"].(string); ok && strings.TrimSpace(title) != "" {
+		context["pull_request_title"] = strings.TrimSpace(title)
+	}
+	if htmlURL, ok := pullRequest["html_url"].(string); ok && strings.TrimSpace(htmlURL) != "" {
+		context["pull_request_url"] = strings.TrimSpace(htmlURL)
+	}
+	if number := pullRequestNumberValue(pullRequest["number"]); number != "" {
+		context["pull_request_number"] = number
+	}
+}
+
+func pullRequestNumberFromGitHubRef(ref string) string {
+	match := regexp.MustCompile(`^refs/pull/([0-9]+)(?:/|$)`).FindStringSubmatch(strings.TrimSpace(ref))
+	if len(match) < 2 {
+		return ""
+	}
+	return match[1]
+}
+
+func pullRequestNumberValue(value any) string {
+	switch typed := value.(type) {
+	case float64:
+		if typed > 0 && typed == float64(int64(typed)) {
+			return fmt.Sprintf("%.0f", typed)
+		}
+	case string:
+		return strings.TrimSpace(typed)
+	}
+	return ""
 }
 
 func ReadTokenFile(path string) (string, error) {

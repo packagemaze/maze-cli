@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -39,6 +40,7 @@ type Config struct {
 	OIDCTokenEnv             string
 	OIDCTokenFile            string
 	OIDCTokenStdin           bool
+	ClientContextJSON        string
 	Format                   string
 	OutputName               string
 	Timeout                  time.Duration
@@ -82,6 +84,11 @@ func Exchange(ctx context.Context, config Config, deps Dependencies) (output.Res
 	if packageName != "" {
 		requestPackage = &packageName
 	}
+	clientContext, err := parseClientContext(resolved.ClientContextJSON)
+	if err != nil {
+		return output.Result{}, ResolvedConfig{}, err
+	}
+	clientContext = mergeClientContext(ci.ClientContext(resolved.ProviderValue, deps.Env), clientContext)
 	exchanger := deps.Exchanger
 	if exchanger == nil {
 		httpClient := deps.HTTPClient
@@ -97,6 +104,7 @@ func Exchange(ctx context.Context, config Config, deps Dependencies) (output.Res
 		Package:   requestPackage,
 		Audience:  resolved.Audience,
 		OIDCToken: oidcToken,
+		Client:    clientContext,
 	})
 	if err != nil {
 		return output.Result{}, ResolvedConfig{}, err
@@ -207,6 +215,41 @@ func validateResolved(config ResolvedConfig, env ci.LookupEnv) error {
 		}
 	}
 	return nil
+}
+
+func parseClientContext(value string) (map[string]any, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil, nil
+	}
+	if len(trimmed) > 16*1024 {
+		return nil, fmt.Errorf("--client-context-json must be at most 16384 bytes")
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(trimmed), &payload); err != nil {
+		return nil, fmt.Errorf("--client-context-json must be a JSON object: %w", err)
+	}
+	if payload == nil {
+		return nil, fmt.Errorf("--client-context-json must be a JSON object")
+	}
+	return payload, nil
+}
+
+func mergeClientContext(base map[string]any, override map[string]any) map[string]any {
+	if len(base) == 0 {
+		return override
+	}
+	if len(override) == 0 {
+		return base
+	}
+	merged := make(map[string]any, len(base)+len(override))
+	for key, value := range base {
+		merged[key] = value
+	}
+	for key, value := range override {
+		merged[key] = value
+	}
+	return merged
 }
 
 func githubOutputNameReserved(name string) bool {

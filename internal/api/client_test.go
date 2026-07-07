@@ -46,6 +46,9 @@ func TestClientExchangeCISendsRequestAndParsesResponse(t *testing.T) {
 		Purpose:   "install",
 		Audience:  "https://api.packagemaze.com",
 		OIDCToken: "oidc-secret",
+		Client: map[string]any{
+			"ci": map[string]any{"sha": "abcdef123456"},
+		},
 	})
 	if err != nil {
 		t.Fatalf("ExchangeCI returned error: %v", err)
@@ -55,6 +58,9 @@ func TestClientExchangeCISendsRequestAndParsesResponse(t *testing.T) {
 	}
 	if gotRequest.OIDCToken != "oidc-secret" {
 		t.Fatalf("oidc_token = %q", gotRequest.OIDCToken)
+	}
+	if gotRequest.Client["ci"].(map[string]any)["sha"] != "abcdef123456" {
+		t.Fatalf("client = %#v", gotRequest.Client)
 	}
 	if response.Token != "maze_ci_token" {
 		t.Fatalf("token = %q", response.Token)

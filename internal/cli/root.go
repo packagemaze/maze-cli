@@ -99,6 +99,7 @@ func newExchangeOIDCCommand(deps auth.Dependencies) *cobra.Command {
 	flags.StringVar(&config.OIDCTokenEnv, "oidc-token-env", auth.DefaultOIDCTokenEnv, "Environment variable containing an OIDC token")
 	flags.StringVar(&config.OIDCTokenFile, "oidc-token-file", "", "File containing an OIDC token")
 	flags.BoolVar(&config.OIDCTokenStdin, "oidc-token-stdin", false, "Read the OIDC token from stdin")
+	flags.StringVar(&config.ClientContextJSON, "client-context-json", "", "Bounded non-secret client context JSON object to attach to the exchange")
 	flags.StringVar(&config.Format, "format", string(output.FormatToken), "Output format: token, json, shell, or github-output")
 	flags.StringVar(&config.OutputName, "output-name", auth.DefaultOutputName, "Output name when --format github-output")
 	flags.DurationVar(&config.Timeout, "timeout", 15*time.Second, "HTTP timeout")
