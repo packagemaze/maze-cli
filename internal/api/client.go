@@ -20,12 +20,13 @@ type Client struct {
 }
 
 type CITokenRequest struct {
-	Provider  string  `json:"provider"`
-	Feed      string  `json:"feed"`
-	Purpose   string  `json:"purpose"`
-	Package   *string `json:"package"`
-	Audience  string  `json:"audience"`
-	OIDCToken string  `json:"oidc_token"`
+	Provider  string         `json:"provider"`
+	Feed      string         `json:"feed"`
+	Purpose   string         `json:"purpose"`
+	Package   *string        `json:"package"`
+	Audience  string         `json:"audience"`
+	OIDCToken string         `json:"oidc_token"`
+	Client    map[string]any `json:"client,omitempty"`
 }
 
 type CITokenResponse struct {

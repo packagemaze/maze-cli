@@ -45,6 +45,31 @@ func TestExchangeOIDCCommandTokenOutput(t *testing.T) {
 	}
 }
 
+func TestExchangeOIDCCommandForwardsClientContext(t *testing.T) {
+	exchanger := &recordingExchanger{}
+	_, stderr, err := runCommandWithDeps(
+		auth.Dependencies{
+			Env:       mapLookup(map[string]string{"MAZE_OIDC_TOKEN": "manual-oidc"}),
+			Exchanger: exchanger,
+		},
+		"auth", "exchange-oidc",
+		"--provider", "manual",
+		"--feed", "your-org/npm",
+		"--purpose", "install",
+		"--client-context-json", `{"ci":{"branch":"main","sha":"abcdef123456"}}`,
+	)
+	if err != nil {
+		t.Fatalf("command returned error: %v\nstderr: %s", err, stderr)
+	}
+	ciContext, ok := exchanger.request.Client["ci"].(map[string]any)
+	if !ok {
+		t.Fatalf("client ci context = %#v", exchanger.request.Client["ci"])
+	}
+	if ciContext["branch"] != "main" || ciContext["sha"] != "abcdef123456" {
+		t.Fatalf("client context = %#v", exchanger.request.Client)
+	}
+}
+
 func TestExchangeOIDCCommandJSONAlias(t *testing.T) {
 	stdout, _, err := runCommandWithDeps(
 		auth.Dependencies{

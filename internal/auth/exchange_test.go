@@ -140,6 +140,52 @@ func TestExchangeManualEnvTokenCallsBackend(t *testing.T) {
 	}
 }
 
+func TestExchangeForwardsClientContext(t *testing.T) {
+	exchanger := &recordingExchanger{t: t}
+	_, _, err := Exchange(context.Background(), Config{
+		ClientContextJSON: `{"ci":{"run_url":"https://example.com/run/1"}}`,
+		Feed:              "your-org/npm",
+		Provider:          "manual",
+		Purpose:           "install",
+	}, Dependencies{
+		Env:       mapLookup(map[string]string{"MAZE_OIDC_TOKEN": "manual-oidc"}),
+		Exchanger: exchanger,
+	})
+	if err != nil {
+		t.Fatalf("Exchange returned error: %v", err)
+	}
+	ciContext, ok := exchanger.request.Client["ci"].(map[string]any)
+	if !ok {
+		t.Fatalf("client ci context = %#v", exchanger.request.Client["ci"])
+	}
+	if ciContext["run_url"] != "https://example.com/run/1" {
+		t.Fatalf("client context = %#v", exchanger.request.Client)
+	}
+}
+
+func TestExchangeRejectsInvalidClientContext(t *testing.T) {
+	tests := []string{
+		`{`,
+		`[]`,
+	}
+	for _, value := range tests {
+		t.Run(value, func(t *testing.T) {
+			_, _, err := Exchange(context.Background(), Config{
+				ClientContextJSON: value,
+				Feed:              "your-org/npm",
+				Provider:          "manual",
+				Purpose:           "install",
+			}, Dependencies{
+				Env:       mapLookup(map[string]string{"MAZE_OIDC_TOKEN": "manual-oidc"}),
+				Exchanger: &recordingExchanger{t: t},
+			})
+			if err == nil || !strings.Contains(err.Error(), "--client-context-json") {
+				t.Fatalf("expected client context error, got %v", err)
+			}
+		})
+	}
+}
+
 func TestExchangeGitLabMissingTokenPrintsSnippet(t *testing.T) {
 	_, _, err := Exchange(context.Background(), Config{
 		Feed:     "your-org/npm",

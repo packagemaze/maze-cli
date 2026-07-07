@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -65,6 +67,72 @@ func TestDetectProvider(t *testing.T) {
 				t.Fatalf("provider = %q, want %q", provider, test.wantProvider)
 			}
 		})
+	}
+}
+
+func TestCircleCIClientContext(t *testing.T) {
+	context := ClientContext(ProviderCircleCI, mapLookup(map[string]string{
+		"CIRCLE_BRANCH":          "codex/circleci-packagemaze",
+		"CIRCLE_BUILD_URL":       "https://app.circleci.com/jobs/circleci/org/project/26",
+		"CIRCLE_JOB":             "test-node",
+		"CIRCLE_PIPELINE_ID":     "495aad4a-fed2-4e38-801d-9bbab7e57ee5",
+		"CIRCLE_PULL_REQUESTS":   "https://github.com/allwhat/marko/pull/1, https://github.com/allwhat/marko/pull/2",
+		"CIRCLE_REPOSITORY_URL":  "https://github.com/allwhat/marko",
+		"CIRCLE_SHA1":            "6860007fd655fdb7d54b97095dd14113b48dc059",
+		"CIRCLE_WORKFLOW_ID":     "820ad10e-75fa-4f66-8891-ea06e3c061b9",
+		"CIRCLE_WORKFLOW_JOB_ID": "39652d1f-9b3b-4587-bcd7-8dcd5c9f3415",
+	}))
+
+	ciContext, ok := context["ci"].(map[string]any)
+	if !ok {
+		t.Fatalf("ci context = %#v", context["ci"])
+	}
+	if ciContext["branch"] != "codex/circleci-packagemaze" {
+		t.Fatalf("branch = %#v", ciContext["branch"])
+	}
+	if ciContext["sha"] != "6860007fd655fdb7d54b97095dd14113b48dc059" {
+		t.Fatalf("sha = %#v", ciContext["sha"])
+	}
+	pullRequests, ok := ciContext["pull_requests"].([]string)
+	if !ok || len(pullRequests) != 2 || pullRequests[0] != "https://github.com/allwhat/marko/pull/1" {
+		t.Fatalf("pull_requests = %#v", ciContext["pull_requests"])
+	}
+}
+
+func TestGitHubClientContextReadsPullRequestEvent(t *testing.T) {
+	eventPath := filepath.Join(t.TempDir(), "event.json")
+	if err := os.WriteFile(eventPath, []byte(`{
+		"pull_request": {
+			"number": 12,
+			"title": "Show CI Session context",
+			"html_url": "https://github.com/packagemaze/packagemaze/pull/12"
+		}
+	}`), 0o600); err != nil {
+		t.Fatalf("write event: %v", err)
+	}
+
+	context := ClientContext(ProviderGitHub, mapLookup(map[string]string{
+		"GITHUB_EVENT_PATH":  eventPath,
+		"GITHUB_REF":         "refs/pull/12/merge",
+		"GITHUB_REPOSITORY":  "packagemaze/packagemaze",
+		"GITHUB_RUN_ATTEMPT": "2",
+		"GITHUB_RUN_ID":      "28769770191",
+		"GITHUB_SERVER_URL":  "https://github.com",
+		"GITHUB_SHA":         "abcdef1234567890",
+	}))
+
+	ciContext, ok := context["ci"].(map[string]any)
+	if !ok {
+		t.Fatalf("ci context = %#v", context["ci"])
+	}
+	if ciContext["pull_request_title"] != "Show CI Session context" {
+		t.Fatalf("pull_request_title = %#v", ciContext["pull_request_title"])
+	}
+	if ciContext["pull_request_number"] != "12" {
+		t.Fatalf("pull_request_number = %#v", ciContext["pull_request_number"])
+	}
+	if ciContext["run_url"] != "https://github.com/packagemaze/packagemaze/actions/runs/28769770191/attempts/2" {
+		t.Fatalf("run_url = %#v", ciContext["run_url"])
 	}
 }
 
