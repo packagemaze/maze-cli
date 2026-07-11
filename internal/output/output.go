@@ -25,6 +25,7 @@ type Result struct {
 	Feed             string
 	FeedBaseURL      string
 	Purpose          string
+	BuildID          string
 	Package          string
 	Scopes           []string
 	Provider         string
@@ -84,6 +85,8 @@ func writeJSON(writer io.Writer, result Result) error {
 		Feed             string   `json:"feed"`
 		FeedBaseURL      string   `json:"feed_base_url,omitempty"`
 		Purpose          string   `json:"purpose"`
+		BuildID          string   `json:"build_id,omitempty"`
+		CISessionID      string   `json:"ci_session_id,omitempty"`
 		Package          string   `json:"package,omitempty"`
 		Scopes           []string `json:"scopes"`
 		Provider         string   `json:"provider"`
@@ -95,6 +98,8 @@ func writeJSON(writer io.Writer, result Result) error {
 		Feed:             result.Feed,
 		FeedBaseURL:      result.FeedBaseURL,
 		Purpose:          result.Purpose,
+		BuildID:          result.BuildID,
+		CISessionID:      result.BuildID,
 		Package:          result.Package,
 		Scopes:           result.Scopes,
 		Provider:         result.Provider,
@@ -106,7 +111,7 @@ func writeJSON(writer io.Writer, result Result) error {
 }
 
 func writeShell(writer io.Writer, result Result) error {
-	_, err := fmt.Fprintf(
+	if _, err := fmt.Fprintf(
 		writer,
 		"export MAZE_TOKEN=%s\nexport MAZE_TOKEN_EXPIRES_AT=%s\nexport MAZE_FEED=%s\nexport MAZE_FEED_BASE_URL=%s\nexport MAZE_PURPOSE=%s\nexport MAZE_ARTIFACT_PROTOCOL=%s\n",
 		shellQuote(result.Token),
@@ -115,6 +120,17 @@ func writeShell(writer io.Writer, result Result) error {
 		shellQuote(result.FeedBaseURL),
 		shellQuote(result.Purpose),
 		shellQuote(result.ArtifactProtocol),
+	); err != nil {
+		return err
+	}
+	if strings.TrimSpace(result.BuildID) == "" {
+		return nil
+	}
+	_, err := fmt.Fprintf(
+		writer,
+		"export MAZE_BUILD_ID=%s\nexport MAZE_CI_SESSION_ID=%s\n",
+		shellQuote(result.BuildID),
+		shellQuote(result.BuildID),
 	)
 	return err
 }
@@ -132,6 +148,13 @@ func writeGitHubOutput(writer io.Writer, result Result, outputName string, outpu
 	}
 	if strings.TrimSpace(result.FeedBaseURL) != "" {
 		outputs = append(outputs, gitHubOutputValue{name: "feed_base_url", value: result.FeedBaseURL})
+	}
+	if strings.TrimSpace(result.BuildID) != "" {
+		outputs = append(
+			outputs,
+			gitHubOutputValue{name: "build_id", value: result.BuildID},
+			gitHubOutputValue{name: "ci_session_id", value: result.BuildID},
+		)
 	}
 	for _, output := range outputs {
 		if err := validateGitHubOutputValue(output.name, output.value); err != nil {

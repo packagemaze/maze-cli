@@ -17,7 +17,13 @@ func TestExchangeOIDCAgainstLocalBackendAPI(t *testing.T) {
 	t.Parallel()
 
 	const oidcToken = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJwYWNrYWdlbWF6ZSJ9.signature"
-	const packageMazeToken = "maze_ci_01K8PACKAGEMAZEREAL"
+	const setupInvocationID = "setup-maze_0123456789abcdef0123456789abcdef"
+	fixture := loadCITokenContractFixture(t)
+	var contractSuccess tokenExchangeOutput
+	if err := json.Unmarshal(fixture.Success, &contractSuccess); err != nil {
+		t.Fatalf("decode contract success: %v", err)
+	}
+	packageMazeToken := contractSuccess.Token
 
 	requests := make(chan tokenExchangeRequest, 1)
 	backendErrors := make(chan string, 1)
@@ -51,16 +57,7 @@ func TestExchangeOIDCAgainstLocalBackendAPI(t *testing.T) {
 		requests <- payload
 
 		writer.Header().Set("Content-Type", "application/json")
-		_, _ = writer.Write([]byte(`{
-			"token": "` + packageMazeToken + `",
-			"expires_at": "2026-06-09T16:30:00Z",
-			"token_type": "Bearer",
-			"feed": "your-org/npm",
-			"feed_base_url": "https://pkg.packagemaze.com/your-org/npm",
-			"purpose": "install",
-			"scopes": ["read"],
-			"artifact_protocol": "npm"
-		}`))
+		_, _ = writer.Write(fixture.Success)
 	}))
 	defer server.Close()
 
@@ -84,6 +81,8 @@ func TestExchangeOIDCAgainstLocalBackendAPI(t *testing.T) {
 		"your-org/npm",
 		"--purpose",
 		"install",
+		"--setup-invocation-id",
+		setupInvocationID,
 		"--format",
 		"json",
 	)
@@ -123,6 +122,12 @@ func TestExchangeOIDCAgainstLocalBackendAPI(t *testing.T) {
 		if payload.OIDCToken != oidcToken {
 			t.Fatalf("oidc_token was not forwarded to backend")
 		}
+		if payload.SetupInvocationID != setupInvocationID {
+			t.Fatalf("setup_invocation_id = %q", payload.SetupInvocationID)
+		}
+		if len(payload.Client) != 0 {
+			t.Fatalf("automatic client metadata = %s, want omitted", payload.Client)
+		}
 	default:
 		t.Fatalf("test backend did not receive token exchange request")
 	}
@@ -141,7 +146,7 @@ func TestExchangeOIDCAgainstLocalBackendAPI(t *testing.T) {
 	if output.Token != packageMazeToken {
 		t.Fatalf("token = %q", output.Token)
 	}
-	if output.ExpiresAt != "2026-06-09T16:30:00Z" {
+	if output.ExpiresAt != contractSuccess.ExpiresAt {
 		t.Fatalf("expires_at = %q", output.ExpiresAt)
 	}
 	if output.Provider != "manual" {
@@ -152,6 +157,9 @@ func TestExchangeOIDCAgainstLocalBackendAPI(t *testing.T) {
 	}
 	if output.FeedBaseURL != "https://pkg.packagemaze.com/your-org/npm" {
 		t.Fatalf("feed_base_url = %q", output.FeedBaseURL)
+	}
+	if output.BuildID != contractSuccess.BuildID || output.CISessionID != contractSuccess.BuildID {
+		t.Fatalf("Build identifiers = %#v", output)
 	}
 	if strings.Join(output.Scopes, ",") != "read" {
 		t.Fatalf("scopes = %#v", output.Scopes)
@@ -199,6 +207,8 @@ func TestExchangeOIDCGitHubOutputAgainstLocalBackendAPI(t *testing.T) {
 			"feed": "your-org/npm",
 			"feed_base_url": "https://pkg.packagemaze.com/your-org/npm",
 			"purpose": "docker-build",
+			"build_id": "cis_github_output",
+			"ci_session_id": "cis_github_output",
 			"scopes": ["read"],
 			"artifact_protocol": "npm"
 		}`))
@@ -281,7 +291,9 @@ func TestExchangeOIDCGitHubOutputAgainstLocalBackendAPI(t *testing.T) {
 	}
 	want := "package_token=" + packageMazeToken + "\n" +
 		"artifact_protocol=npm\n" +
-		"feed_base_url=https://pkg.packagemaze.com/your-org/npm\n"
+		"feed_base_url=https://pkg.packagemaze.com/your-org/npm\n" +
+		"build_id=cis_github_output\n" +
+		"ci_session_id=cis_github_output\n"
 	if string(outputFile) != want {
 		t.Fatalf("GITHUB_OUTPUT = %q, want %q", string(outputFile), want)
 	}
@@ -291,12 +303,14 @@ func TestExchangeOIDCGitHubOutputAgainstLocalBackendAPI(t *testing.T) {
 }
 
 type tokenExchangeRequest struct {
-	Provider  string  `json:"provider"`
-	Feed      string  `json:"feed"`
-	Purpose   string  `json:"purpose"`
-	Package   *string `json:"package"`
-	Audience  string  `json:"audience"`
-	OIDCToken string  `json:"oidc_token"`
+	Provider          string          `json:"provider"`
+	Feed              string          `json:"feed"`
+	Purpose           string          `json:"purpose"`
+	Package           *string         `json:"package"`
+	Audience          string          `json:"audience"`
+	OIDCToken         string          `json:"oidc_token"`
+	SetupInvocationID string          `json:"setup_invocation_id"`
+	Client            json.RawMessage `json:"client"`
 }
 
 type tokenExchangeOutput struct {
@@ -306,6 +320,12 @@ type tokenExchangeOutput struct {
 	Scopes           []string `json:"scopes"`
 	ArtifactProtocol string   `json:"artifact_protocol"`
 	FeedBaseURL      string   `json:"feed_base_url"`
+	BuildID          string   `json:"build_id"`
+	CISessionID      string   `json:"ci_session_id"`
+}
+
+type ciTokenContractFixture struct {
+	Success json.RawMessage `json:"success"`
 }
 
 func packageMazeCLIDir(t *testing.T) string {
@@ -315,4 +335,17 @@ func packageMazeCLIDir(t *testing.T) string {
 		t.Fatalf("resolve CLI directory: %v", err)
 	}
 	return cliDir
+}
+
+func loadCITokenContractFixture(t *testing.T) ciTokenContractFixture {
+	t.Helper()
+	content, err := os.ReadFile(filepath.Join(packageMazeCLIDir(t), "testdata", "contracts", "ci-token-exchange.json"))
+	if err != nil {
+		t.Fatalf("read CI token contract fixture: %v", err)
+	}
+	var fixture ciTokenContractFixture
+	if err := json.Unmarshal(content, &fixture); err != nil {
+		t.Fatalf("decode CI token contract fixture: %v", err)
+	}
+	return fixture
 }

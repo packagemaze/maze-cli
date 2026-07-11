@@ -59,7 +59,7 @@ func newExchangeOIDCCommand(deps auth.Dependencies) *cobra.Command {
 		Use:   "exchange-oidc",
 		Short: "Exchange a CI OIDC identity token for a PackageMaze Token",
 		Long: "Exchange a CI OIDC identity token for a short-lived PackageMaze Token.\n\n" +
-			"The command supports GitHub Actions, GitLab CI/CD, CircleCI, and manual token input.",
+			"The command supports GitHub Actions, CircleCI, and manual token input. GitLab token input is recognized for forward compatibility, but PackageMaze does not yet accept GitLab identities in production.",
 		Example: "  maze auth exchange-oidc --feed your-org/your-feed --purpose install --format github-output\n" +
 			"  maze auth exchange-oidc --feed your-org/your-feed --purpose publish --package your-package --format github-output",
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -99,7 +99,8 @@ func newExchangeOIDCCommand(deps auth.Dependencies) *cobra.Command {
 	flags.StringVar(&config.OIDCTokenEnv, "oidc-token-env", auth.DefaultOIDCTokenEnv, "Environment variable containing an OIDC token")
 	flags.StringVar(&config.OIDCTokenFile, "oidc-token-file", "", "File containing an OIDC token")
 	flags.BoolVar(&config.OIDCTokenStdin, "oidc-token-stdin", false, "Read the OIDC token from stdin")
-	flags.StringVar(&config.ClientContextJSON, "client-context-json", "", "Bounded non-secret client context JSON object to attach to the exchange")
+	flags.StringVar(&config.SetupInvocationID, "setup-invocation-id", "", "Unverified non-secret wrapper invocation id (default: MAZE_SETUP_INVOCATION_ID)")
+	flags.StringVar(&config.ClientContextJSON, "client-context-json", "", "Legacy caller-supplied, unverified client metadata JSON accepted for compatibility")
 	flags.StringVar(&config.Format, "format", string(output.FormatToken), "Output format: token, json, shell, or github-output")
 	flags.StringVar(&config.OutputName, "output-name", auth.DefaultOutputName, "Output name when --format github-output")
 	flags.DurationVar(&config.Timeout, "timeout", 15*time.Second, "HTTP timeout")

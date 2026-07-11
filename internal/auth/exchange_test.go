@@ -57,6 +57,16 @@ func TestResolveValidation(t *testing.T) {
 			wantErr: "format",
 		},
 		{
+			name:    "setup invocation id is too long",
+			config:  Config{Provider: "manual", Feed: "your-org/npm", Purpose: "install", SetupInvocationID: strings.Repeat("a", 161)},
+			wantErr: "--setup-invocation-id",
+		},
+		{
+			name:    "setup invocation id rejects whitespace",
+			config:  Config{Provider: "manual", Feed: "your-org/npm", Purpose: "install", SetupInvocationID: "setup maze 1"},
+			wantErr: "--setup-invocation-id",
+		},
+		{
 			name: "github output name collides with artifact protocol metadata",
 			config: Config{
 				Provider:   "manual",
@@ -75,6 +85,28 @@ func TestResolveValidation(t *testing.T) {
 				Purpose:    "install",
 				Format:     string(output.FormatGitHubOutput),
 				OutputName: "feed_base_url",
+			},
+			wantErr: "reserved",
+		},
+		{
+			name: "github output name collides with Build metadata",
+			config: Config{
+				Provider:   "manual",
+				Feed:       "your-org/npm",
+				Purpose:    "install",
+				Format:     string(output.FormatGitHubOutput),
+				OutputName: "build_id",
+			},
+			wantErr: "reserved",
+		},
+		{
+			name: "github output name collides with compatibility Build metadata",
+			config: Config{
+				Provider:   "manual",
+				Feed:       "your-org/npm",
+				Purpose:    "install",
+				Format:     string(output.FormatGitHubOutput),
+				OutputName: "ci_session_id",
 			},
 			wantErr: "reserved",
 		},
@@ -138,9 +170,64 @@ func TestExchangeManualEnvTokenCallsBackend(t *testing.T) {
 	if result.FeedBaseURL != "https://pkg.packagemaze.com/your-org/npm" {
 		t.Fatalf("feed_base_url = %q", result.FeedBaseURL)
 	}
+	if result.BuildID != "cis_recorded" {
+		t.Fatalf("build id = %q", result.BuildID)
+	}
 }
 
-func TestExchangeForwardsClientContext(t *testing.T) {
+func TestResolveSetupInvocationIDFlagPrecedesEnvironment(t *testing.T) {
+	resolved, err := Resolve(Config{
+		Feed:              "your-org/npm",
+		Purpose:           "install",
+		Provider:          "manual",
+		SetupInvocationID: "setup-maze_flag-id",
+	}, Dependencies{Env: mapLookup(map[string]string{
+		"MAZE_SETUP_INVOCATION_ID": "setup-maze_environment-id",
+	})})
+	if err != nil {
+		t.Fatalf("Resolve returned error: %v", err)
+	}
+	if resolved.SetupInvocationID != "setup-maze_flag-id" {
+		t.Fatalf("setup invocation id = %q", resolved.SetupInvocationID)
+	}
+}
+
+func TestResolveSetupInvocationIDFromEnvironment(t *testing.T) {
+	resolved, err := Resolve(Config{
+		Feed:     "your-org/npm",
+		Purpose:  "install",
+		Provider: "manual",
+	}, Dependencies{Env: mapLookup(map[string]string{
+		"MAZE_SETUP_INVOCATION_ID": "circleci-maze-orb_environment-id",
+	})})
+	if err != nil {
+		t.Fatalf("Resolve returned error: %v", err)
+	}
+	if resolved.SetupInvocationID != "circleci-maze-orb_environment-id" {
+		t.Fatalf("setup invocation id = %q", resolved.SetupInvocationID)
+	}
+}
+
+func TestExchangeForwardsTypedSetupInvocationID(t *testing.T) {
+	exchanger := &recordingExchanger{t: t}
+	_, _, err := Exchange(context.Background(), Config{
+		Feed:              "your-org/npm",
+		Provider:          "manual",
+		Purpose:           "install",
+		SetupInvocationID: "setup-maze_0123456789abcdef0123456789abcdef",
+	}, Dependencies{
+		Env:       mapLookup(map[string]string{"MAZE_OIDC_TOKEN": "manual-oidc"}),
+		Exchanger: exchanger,
+	})
+	if err != nil {
+		t.Fatalf("Exchange returned error: %v", err)
+	}
+	if exchanger.request.SetupInvocationID != "setup-maze_0123456789abcdef0123456789abcdef" {
+		t.Fatalf("setup invocation id = %q", exchanger.request.SetupInvocationID)
+	}
+}
+
+func TestExchangeForwardsExplicitLegacyClientContext(t *testing.T) {
 	exchanger := &recordingExchanger{t: t}
 	_, _, err := Exchange(context.Background(), Config{
 		ClientContextJSON: `{"ci":{"run_url":"https://example.com/run/1"}}`,
@@ -160,6 +247,30 @@ func TestExchangeForwardsClientContext(t *testing.T) {
 	}
 	if ciContext["run_url"] != "https://example.com/run/1" {
 		t.Fatalf("client context = %#v", exchanger.request.Client)
+	}
+}
+
+func TestExchangeDoesNotCollectCIEnvironmentAsClientMetadata(t *testing.T) {
+	exchanger := &recordingExchanger{t: t}
+	_, _, err := Exchange(context.Background(), Config{
+		Feed:           "your-org/npm",
+		OIDCTokenStdin: true,
+		Provider:       "github",
+		Purpose:        "install",
+	}, Dependencies{
+		Env: mapLookup(map[string]string{
+			"GITHUB_ACTIONS":    "true",
+			"GITHUB_REPOSITORY": "packagemaze/maze-cli",
+			"GITHUB_RUN_ID":     "12345",
+		}),
+		Stdin:     strings.NewReader("github-oidc-token"),
+		Exchanger: exchanger,
+	})
+	if err != nil {
+		t.Fatalf("Exchange returned error: %v", err)
+	}
+	if exchanger.request.Client != nil {
+		t.Fatalf("automatic client metadata = %#v, want nil", exchanger.request.Client)
 	}
 }
 
@@ -224,7 +335,8 @@ func (f *recordingExchanger) ExchangeCI(_ context.Context, request api.CITokenRe
 		TokenType:        "Bearer",
 		Feed:             request.Feed,
 		FeedBaseURL:      "https://pkg.packagemaze.com/" + request.Feed,
-		Purpose:          request.Purpose,
+		ExchangePurpose:  request.Purpose,
+		BuildID:          "cis_recorded",
 		Scopes:           []string{"publish"},
 		ArtifactProtocol: "npm",
 	}, nil
