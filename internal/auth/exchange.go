@@ -19,14 +19,16 @@ import (
 )
 
 const (
-	DefaultBaseURL      = "https://api.packagemaze.com"
-	DefaultOIDCTokenEnv = "MAZE_OIDC_TOKEN"
-	DefaultOutputName   = "token"
+	DefaultBaseURL              = "https://api.packagemaze.com"
+	DefaultOIDCTokenEnv         = "MAZE_OIDC_TOKEN"
+	DefaultOutputName           = "token"
+	DefaultSetupInvocationIDEnv = "MAZE_SETUP_INVOCATION_ID"
 )
 
 var (
-	feedPattern       = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$`)
-	outputNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	feedPattern              = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$`)
+	outputNamePattern        = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	setupInvocationIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$`)
 )
 
 type Config struct {
@@ -40,6 +42,7 @@ type Config struct {
 	OIDCTokenEnv             string
 	OIDCTokenFile            string
 	OIDCTokenStdin           bool
+	SetupInvocationID        string
 	ClientContextJSON        string
 	Format                   string
 	OutputName               string
@@ -88,7 +91,6 @@ func Exchange(ctx context.Context, config Config, deps Dependencies) (output.Res
 	if err != nil {
 		return output.Result{}, ResolvedConfig{}, err
 	}
-	clientContext = mergeClientContext(ci.ClientContext(resolved.ProviderValue, deps.Env), clientContext)
 	exchanger := deps.Exchanger
 	if exchanger == nil {
 		httpClient := deps.HTTPClient
@@ -98,13 +100,14 @@ func Exchange(ctx context.Context, config Config, deps Dependencies) (output.Res
 		exchanger = api.NewClient(resolved.APIURL, httpClient)
 	}
 	response, err := exchanger.ExchangeCI(ctx, api.CITokenRequest{
-		Provider:  string(resolved.ProviderValue),
-		Feed:      resolved.Feed,
-		Purpose:   resolved.Purpose,
-		Package:   requestPackage,
-		Audience:  resolved.Audience,
-		OIDCToken: oidcToken,
-		Client:    clientContext,
+		Provider:          string(resolved.ProviderValue),
+		Feed:              resolved.Feed,
+		Purpose:           resolved.Purpose,
+		Package:           requestPackage,
+		Audience:          resolved.Audience,
+		OIDCToken:         oidcToken,
+		SetupInvocationID: resolved.SetupInvocationID,
+		Client:            clientContext,
 	})
 	if err != nil {
 		return output.Result{}, ResolvedConfig{}, err
@@ -115,7 +118,8 @@ func Exchange(ctx context.Context, config Config, deps Dependencies) (output.Res
 		TokenType:        response.TokenType,
 		Feed:             fallback(response.Feed, resolved.Feed),
 		FeedBaseURL:      response.FeedBaseURL,
-		Purpose:          fallback(response.Purpose, resolved.Purpose),
+		Purpose:          fallback(response.ExchangePurpose, resolved.Purpose),
+		BuildID:          response.BuildID,
 		Package:          packageName,
 		Scopes:           response.Scopes,
 		Provider:         string(resolved.ProviderValue),
@@ -138,6 +142,10 @@ func Resolve(config Config, deps Dependencies) (ResolvedConfig, error) {
 		config.Audience = config.BaseURL
 	}
 	config.Audience = strings.TrimSpace(config.Audience)
+	config.SetupInvocationID = firstNonEmpty(
+		config.SetupInvocationID,
+		envValue(env, DefaultSetupInvocationIDEnv),
+	)
 	config.OIDCTokenEnv = firstNonEmpty(config.OIDCTokenEnv, DefaultOIDCTokenEnv)
 	config.OutputName = firstNonEmpty(config.OutputName, DefaultOutputName)
 	if config.Timeout == 0 {
@@ -195,6 +203,9 @@ func validateResolved(config ResolvedConfig, env ci.LookupEnv) error {
 	if strings.TrimSpace(config.Audience) == "" {
 		return fmt.Errorf("--audience must not be empty")
 	}
+	if config.SetupInvocationID != "" && !setupInvocationIDPattern.MatchString(config.SetupInvocationID) {
+		return fmt.Errorf("--setup-invocation-id must be 1-160 letters, numbers, dots, underscores, colons, or hyphens; prefix generated ids with the wrapper name")
+	}
 	if config.OIDCTokenFile != "" && config.OIDCTokenStdin {
 		return fmt.Errorf("choose either --oidc-token-file or --oidc-token-stdin, not both")
 	}
@@ -235,26 +246,9 @@ func parseClientContext(value string) (map[string]any, error) {
 	return payload, nil
 }
 
-func mergeClientContext(base map[string]any, override map[string]any) map[string]any {
-	if len(base) == 0 {
-		return override
-	}
-	if len(override) == 0 {
-		return base
-	}
-	merged := make(map[string]any, len(base)+len(override))
-	for key, value := range base {
-		merged[key] = value
-	}
-	for key, value := range override {
-		merged[key] = value
-	}
-	return merged
-}
-
 func githubOutputNameReserved(name string) bool {
 	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "artifact_protocol", "feed_base_url":
+	case "artifact_protocol", "build_id", "ci_session_id", "feed_base_url":
 		return true
 	default:
 		return false

@@ -57,6 +57,47 @@ The exchange client posts to:
 POST /v1/auth/ci-token
 ```
 
+Wrapper actions and orbs can correlate the Tokens they request during one
+setup invocation without sending generic client metadata:
+
+```sh
+maze auth exchange-oidc \
+  --feed <organization>/<feed> \
+  --purpose install \
+  --setup-invocation-id setup-maze_0123456789abcdef0123456789abcdef
+```
+
+`--setup-invocation-id` takes precedence over
+`MAZE_SETUP_INVOCATION_ID`. The value is optional, non-secret, and limited to
+160 letters, numbers, dots, underscores, colons, or hyphens. Wrappers should
+generate one stable random id per invocation and prefix it with their own name,
+for example `setup-maze_…` or `circleci-maze-orb_…`.
+
+The prefix is caller-supplied provenance, not provider-signed Build evidence.
+PackageMaze uses the opaque id only for correlation; neither the CLI nor the
+service infers human intent from it. Legacy `--client-context-json` remains
+accepted for explicit rolling compatibility, but its contents are
+caller-supplied and unverified; it is not the Build evidence or correlation
+contract. As of v0.0.4 the CLI no longer collects or sends CI environment
+metadata automatically.
+
+PackageMaze returns the server-derived Build handle separately. JSON,
+`github-output`, and shell output prefer `build_id` while also emitting the
+identical compatibility alias `ci_session_id`. Shell output names them
+`MAZE_BUILD_ID` and `MAZE_CI_SESSION_ID`. Token-only output remains exactly the
+Token Secret followed by a newline. Use `build_id` with PackageMaze's Build
+Report surfaces; do not derive it from `setup_invocation_id`.
+
+The Hosted MCP compatibility capability remains `get_ci_session_report` and
+currently names its input `ci_session_id`. Pass the identical server-derived
+handle emitted by the CLI; the compatibility name does not turn it into a
+different object from the Build.
+
+The response `purpose` remains the requested exchange purpose (`install`,
+`publish`, `docker-build`, or `test`). PackageMaze stores the resulting
+short-lived credential with Token Purpose `cicd`; that server-side Token
+classification does not replace the exchange purpose in CLI output.
+
 Use `--base-url` to change the API Domain base URL or `--api-url` to override
 the full API root. `http` URLs are rejected unless they target localhost and
 `--allow-insecure-localhost` is set.
@@ -156,16 +197,24 @@ maze auth exchange-oidc \
 ```
 
 The `github-output` format writes the requested Token output plus
-`artifact_protocol` and `feed_base_url` so wrapper actions can choose
-protocol-specific setup and canonical registry URLs without asking workflows to
-duplicate Feed metadata.
+`artifact_protocol`, `feed_base_url`, `build_id`, and the compatibility
+`ci_session_id` so wrapper actions can choose protocol-specific setup, use
+canonical registry URLs, and link users or Agents to the exact Build without
+asking workflows to duplicate Feed metadata.
 
 The `shell` format writes `MAZE_TOKEN`, `MAZE_TOKEN_EXPIRES_AT`, `MAZE_FEED`,
-`MAZE_FEED_BASE_URL`, `MAZE_PURPOSE`, and `MAZE_ARTIFACT_PROTOCOL` exports for
-wrapper actions that need to consume exchange metadata without using GitHub step
-outputs.
+`MAZE_FEED_BASE_URL`, `MAZE_PURPOSE`, `MAZE_ARTIFACT_PROTOCOL`,
+`MAZE_BUILD_ID`, and compatibility `MAZE_CI_SESSION_ID` exports for wrapper
+actions that need to consume exchange metadata without using GitHub step
+outputs. Build exports are omitted when an older PackageMaze deployment does
+not return a Build handle during a rolling upgrade.
 
 ## GitLab CI/CD
+
+The CLI can acquire an explicitly configured GitLab OIDC token, but PackageMaze
+does not yet accept GitLab CI/CD identities in production. The command will
+surface the Worker's structured `unsupported_provider` diagnostic until a
+first-class GitLab integration ships.
 
 ```yaml
 id_tokens:

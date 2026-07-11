@@ -6,12 +6,50 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 )
 
+type ciTokenContractFixture struct {
+	Request         json.RawMessage `json:"request"`
+	Success         json.RawMessage `json:"success"`
+	Rejected        json.RawMessage `json:"rejected"`
+	ValidationError json.RawMessage `json:"validation_error"`
+}
+
+func TestCITokenRequestMatchesPackageMazeContractFixture(t *testing.T) {
+	fixture := loadCITokenContractFixture(t)
+	var expected map[string]any
+	if err := json.Unmarshal(fixture.Request, &expected); err != nil {
+		t.Fatalf("decode fixture request: %v", err)
+	}
+
+	actualJSON, err := json.Marshal(CITokenRequest{
+		Provider:          "manual",
+		Feed:              "your-org/npm",
+		Purpose:           "install",
+		Audience:          "https://api.packagemaze.com",
+		OIDCToken:         "fixture-oidc-token",
+		SetupInvocationID: "setup-maze_0123456789abcdef0123456789abcdef",
+	})
+	if err != nil {
+		t.Fatalf("encode request: %v", err)
+	}
+	var actual map[string]any
+	if err := json.Unmarshal(actualJSON, &actual); err != nil {
+		t.Fatalf("decode encoded request: %v", err)
+	}
+	if !reflect.DeepEqual(actual, expected) {
+		t.Fatalf("request contract mismatch:\nactual:   %#v\nexpected: %#v", actual, expected)
+	}
+}
+
 func TestClientExchangeCISendsRequestAndParsesResponse(t *testing.T) {
+	fixture := loadCITokenContractFixture(t)
 	var gotPath string
 	var gotRequest CITokenRequest
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -26,26 +64,18 @@ func TestClientExchangeCISendsRequestAndParsesResponse(t *testing.T) {
 			t.Fatalf("decode request: %v", err)
 		}
 		writer.Header().Set("Content-Type", "application/json")
-		_, _ = writer.Write([]byte(`{
-			"token":"maze_ci_token",
-			"expires_at":"2026-06-08T12:30:00Z",
-			"token_type":"Bearer",
-			"feed":"your-org/npm",
-			"feed_base_url":"https://pkg.packagemaze.com/your-org/npm",
-			"purpose":"install",
-			"scopes":["read"],
-			"artifact_protocol":"npm"
-		}`))
+		_, _ = writer.Write(fixture.Success)
 	}))
 	defer server.Close()
 
 	client := NewClient(server.URL+"/v1", server.Client())
 	response, err := client.ExchangeCI(context.Background(), CITokenRequest{
-		Provider:  "github",
-		Feed:      "your-org/npm",
-		Purpose:   "install",
-		Audience:  "https://api.packagemaze.com",
-		OIDCToken: "oidc-secret",
+		Provider:          "github",
+		Feed:              "your-org/npm",
+		Purpose:           "install",
+		Audience:          "https://api.packagemaze.com",
+		OIDCToken:         "oidc-secret",
+		SetupInvocationID: "setup-maze_0123456789abcdef0123456789abcdef",
 		Client: map[string]any{
 			"ci": map[string]any{"sha": "abcdef123456"},
 		},
@@ -62,7 +92,10 @@ func TestClientExchangeCISendsRequestAndParsesResponse(t *testing.T) {
 	if gotRequest.Client["ci"].(map[string]any)["sha"] != "abcdef123456" {
 		t.Fatalf("client = %#v", gotRequest.Client)
 	}
-	if response.Token != "maze_ci_token" {
+	if gotRequest.SetupInvocationID != "setup-maze_0123456789abcdef0123456789abcdef" {
+		t.Fatalf("setup_invocation_id = %q", gotRequest.SetupInvocationID)
+	}
+	if response.Token != "maze_ci_fixture_token" {
 		t.Fatalf("token = %q", response.Token)
 	}
 	if response.ExpiresAt.Format(time.RFC3339) != "2026-06-08T12:30:00Z" {
@@ -76,6 +109,125 @@ func TestClientExchangeCISendsRequestAndParsesResponse(t *testing.T) {
 	}
 	if response.FeedBaseURL != "https://pkg.packagemaze.com/your-org/npm" {
 		t.Fatalf("feed_base_url = %q", response.FeedBaseURL)
+	}
+	if response.ExchangePurpose != "install" {
+		t.Fatalf("exchange purpose = %q", response.ExchangePurpose)
+	}
+	if response.BuildID != "cis_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" {
+		t.Fatalf("build id = %q", response.BuildID)
+	}
+}
+
+func TestClientExchangeCIPrefersExplicitExchangePurpose(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = writer.Write([]byte(`{
+			"token":"maze_ci_token",
+			"expires_at":"2026-06-08T12:30:00Z",
+			"purpose":"cicd",
+			"exchange_purpose":"publish",
+			"scopes":["publish"]
+		}`))
+	}))
+	defer server.Close()
+
+	response, err := NewClient(server.URL, server.Client()).ExchangeCI(context.Background(), CITokenRequest{
+		Provider: "manual", Feed: "your-org/npm", Purpose: "publish", Audience: "https://api.packagemaze.com", OIDCToken: "oidc-secret",
+	})
+	if err != nil {
+		t.Fatalf("ExchangeCI returned error: %v", err)
+	}
+	if response.ExchangePurpose != "publish" {
+		t.Fatalf("exchange purpose = %q", response.ExchangePurpose)
+	}
+}
+
+func TestClientExchangeCIDoesNotExposeStoredTokenPurposeAsExchangePurpose(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = writer.Write([]byte(`{
+			"token":"maze_ci_token",
+			"expires_at":"2026-06-08T12:30:00Z",
+			"purpose":"cicd",
+			"scopes":["read"]
+		}`))
+	}))
+	defer server.Close()
+
+	response, err := NewClient(server.URL, server.Client()).ExchangeCI(context.Background(), CITokenRequest{
+		Provider: "manual", Feed: "your-org/npm", Purpose: "install", Audience: "https://api.packagemaze.com", OIDCToken: "oidc-secret",
+	})
+	if err != nil {
+		t.Fatalf("ExchangeCI returned error: %v", err)
+	}
+	if response.ExchangePurpose != "install" {
+		t.Fatalf("exchange purpose = %q", response.ExchangePurpose)
+	}
+}
+
+func TestClientExchangeCIAcceptsCompatibilityCISessionID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = writer.Write([]byte(`{
+			"token":"maze_ci_token",
+			"expires_at":"2026-06-08T12:30:00Z",
+			"purpose":"install",
+			"ci_session_id":"cis_compatibility"
+		}`))
+	}))
+	defer server.Close()
+
+	response, err := NewClient(server.URL, server.Client()).ExchangeCI(context.Background(), CITokenRequest{
+		Provider: "manual", Feed: "your-org/npm", Purpose: "install", Audience: "https://api.packagemaze.com", OIDCToken: "oidc-secret",
+	})
+	if err != nil {
+		t.Fatalf("ExchangeCI returned error: %v", err)
+	}
+	if response.BuildID != "cis_compatibility" {
+		t.Fatalf("build id = %q", response.BuildID)
+	}
+}
+
+func TestClientExchangeCIAcceptsPreferredBuildIDWithoutCompatibilityAlias(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = writer.Write([]byte(`{
+			"token":"maze_ci_token",
+			"expires_at":"2026-06-08T12:30:00Z",
+			"purpose":"install",
+			"build_id":"cis_preferred"
+		}`))
+	}))
+	defer server.Close()
+
+	response, err := NewClient(server.URL, server.Client()).ExchangeCI(context.Background(), CITokenRequest{
+		Provider: "manual", Feed: "your-org/npm", Purpose: "install", Audience: "https://api.packagemaze.com", OIDCToken: "oidc-secret",
+	})
+	if err != nil {
+		t.Fatalf("ExchangeCI returned error: %v", err)
+	}
+	if response.BuildID != "cis_preferred" {
+		t.Fatalf("build id = %q", response.BuildID)
+	}
+}
+
+func TestClientExchangeCIRejectsContradictoryBuildIdentifiers(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = writer.Write([]byte(`{
+			"token":"maze_ci_token",
+			"expires_at":"2026-06-08T12:30:00Z",
+			"purpose":"install",
+			"build_id":"cis_build",
+			"ci_session_id":"cis_other"
+		}`))
+	}))
+	defer server.Close()
+
+	_, err := NewClient(server.URL, server.Client()).ExchangeCI(context.Background(), CITokenRequest{
+		Provider: "manual", Feed: "your-org/npm", Purpose: "install", Audience: "https://api.packagemaze.com", OIDCToken: "oidc-secret",
+	})
+	if err == nil || !strings.Contains(err.Error(), "identified different Builds") {
+		t.Fatalf("expected contradictory Build identifiers error, got %v", err)
+	}
+	var contractError *ContractResponseError
+	if !errors.As(err, &contractError) {
+		t.Fatalf("expected ContractResponseError, got %T", err)
 	}
 }
 
@@ -112,6 +264,53 @@ func TestClientExchangeCIStatusErrors(t *testing.T) {
 				t.Fatalf("expected error containing %q, got %v", test.want, err)
 			}
 		})
+	}
+}
+
+func TestClientExchangeCIStructuredWorkerError(t *testing.T) {
+	fixture := loadCITokenContractFixture(t)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusUnauthorized)
+		_, _ = writer.Write(fixture.Rejected)
+	}))
+	defer server.Close()
+
+	_, err := NewClient(server.URL, server.Client()).ExchangeCI(context.Background(), CITokenRequest{
+		Provider: "gitlab", Feed: "your-org/npm", Purpose: "install", Audience: "https://api.packagemaze.com", OIDCToken: "oidc-secret",
+	})
+	if err == nil {
+		t.Fatal("expected status error")
+	}
+	for _, want := range []string{
+		"This CI OIDC provider is not supported yet.",
+		"unsupported_provider",
+		"Use GitHub Actions access or a scoped static CI Token fallback for this Feed.",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("expected error containing %q, got %v", want, err)
+		}
+	}
+}
+
+func TestClientExchangeCIValidationErrorDoesNotPrintRawJSON(t *testing.T) {
+	fixture := loadCITokenContractFixture(t)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusUnprocessableEntity)
+		_, _ = writer.Write(fixture.ValidationError)
+	}))
+	defer server.Close()
+
+	_, err := NewClient(server.URL, server.Client()).ExchangeCI(context.Background(), CITokenRequest{
+		Provider: "manual", Feed: "your-org/npm", Purpose: "install", Audience: "https://api.packagemaze.com", OIDCToken: "oidc-secret",
+	})
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	if !strings.Contains(err.Error(), "setup_invocation_id: String should have at most 160 characters") {
+		t.Fatalf("validation detail = %v", err)
+	}
+	if strings.Contains(err.Error(), `\"input\"`) || strings.Contains(err.Error(), "[REDACTED]") {
+		t.Fatalf("raw validation payload leaked into error: %v", err)
 	}
 }
 
@@ -182,4 +381,18 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (fn roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
 	return fn(request)
+}
+
+func loadCITokenContractFixture(t *testing.T) ciTokenContractFixture {
+	t.Helper()
+	path := filepath.Join("..", "..", "testdata", "contracts", "ci-token-exchange.json")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read CI token contract fixture: %v", err)
+	}
+	var fixture ciTokenContractFixture
+	if err := json.Unmarshal(content, &fixture); err != nil {
+		t.Fatalf("decode CI token contract fixture: %v", err)
+	}
+	return fixture
 }

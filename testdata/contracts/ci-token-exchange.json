@@ -1,0 +1,46 @@
+{
+  "request": {
+    "provider": "manual",
+    "feed": "your-org/npm",
+    "purpose": "install",
+    "package": null,
+    "audience": "https://api.packagemaze.com",
+    "oidc_token": "fixture-oidc-token",
+    "setup_invocation_id": "setup-maze_0123456789abcdef0123456789abcdef"
+  },
+  "success": {
+    "token": "maze_ci_fixture_token",
+    "expires_at": "2026-06-08T12:30:00Z",
+    "token_type": "Bearer",
+    "feed": "your-org/npm",
+    "feed_base_url": "https://pkg.packagemaze.com/your-org/npm",
+    "purpose": "install",
+    "build_id": "cis_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ci_session_id": "cis_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "scopes": [
+      "read"
+    ],
+    "artifact_protocol": "npm"
+  },
+  "rejected": {
+    "detail": {
+      "category": "provider_unsupported",
+      "code": "unsupported_provider",
+      "message": "This CI OIDC provider is not supported yet.",
+      "recovery": "Use GitHub Actions access or a scoped static CI Token fallback for this Feed."
+    }
+  },
+  "validation_error": {
+    "detail": [
+      {
+        "input": "[REDACTED]",
+        "loc": [
+          "body",
+          "setup_invocation_id"
+        ],
+        "msg": "String should have at most 160 characters",
+        "type": "string_too_long"
+      }
+    ]
+  }
+}

@@ -51,6 +51,13 @@ items below are deliberately addressed.
   proxy behavior, and rate-limit handling intentionally.
 - [ ] Backend error responses map to a stable CLI error taxonomy.
 - [x] API contract tests cover request/response schemas and redaction.
+- [x] Wrapper setup correlation uses the typed, optional
+  `setup_invocation_id` request field with tested flag-over-environment
+  precedence; the CLI does not collect CI environment metadata automatically,
+  and explicit legacy client metadata is not treated as Build evidence.
+- [x] Exchange responses accept preferred `build_id` and compatibility
+  `ci_session_id`, reject contradictory aliases, and expose the server-derived
+  handle in machine output without changing token-only stdout.
 - [x] The API Domain exposes `POST /v1/auth/ci-token` with the same names used
   by CLI and future MCP capabilities.
 - [ ] CI provider trust rules are testable with GitHub Actions, GitLab CI/CD,

@@ -45,7 +45,7 @@ func TestExchangeOIDCCommandTokenOutput(t *testing.T) {
 	}
 }
 
-func TestExchangeOIDCCommandForwardsClientContext(t *testing.T) {
+func TestExchangeOIDCCommandForwardsExplicitLegacyClientContext(t *testing.T) {
 	exchanger := &recordingExchanger{}
 	_, stderr, err := runCommandWithDeps(
 		auth.Dependencies{
@@ -67,6 +67,30 @@ func TestExchangeOIDCCommandForwardsClientContext(t *testing.T) {
 	}
 	if ciContext["branch"] != "main" || ciContext["sha"] != "abcdef123456" {
 		t.Fatalf("client context = %#v", exchanger.request.Client)
+	}
+}
+
+func TestExchangeOIDCCommandForwardsSetupInvocationID(t *testing.T) {
+	exchanger := &recordingExchanger{}
+	_, stderr, err := runCommandWithDeps(
+		auth.Dependencies{
+			Env: mapLookup(map[string]string{
+				"MAZE_OIDC_TOKEN":          "manual-oidc",
+				"MAZE_SETUP_INVOCATION_ID": "setup-maze_environment-id",
+			}),
+			Exchanger: exchanger,
+		},
+		"auth", "exchange-oidc",
+		"--provider", "manual",
+		"--feed", "your-org/npm",
+		"--purpose", "install",
+		"--setup-invocation-id", "setup-maze_flag-id",
+	)
+	if err != nil {
+		t.Fatalf("command returned error: %v\nstderr: %s", err, stderr)
+	}
+	if exchanger.request.SetupInvocationID != "setup-maze_flag-id" {
+		t.Fatalf("setup invocation id = %q", exchanger.request.SetupInvocationID)
 	}
 }
 
@@ -94,6 +118,9 @@ func TestExchangeOIDCCommandJSONAlias(t *testing.T) {
 	}
 	if payload["token"] != "maze_ci_real" {
 		t.Fatalf("token = %v", payload["token"])
+	}
+	if payload["build_id"] != "cis_recorded" || payload["ci_session_id"] != "cis_recorded" {
+		t.Fatalf("Build identifiers = %#v", payload)
 	}
 }
 
@@ -217,12 +244,13 @@ func (f *recordingExchanger) ExchangeCI(_ context.Context, request api.CITokenRe
 	f.called = true
 	f.request = request
 	return api.CITokenResponse{
-		Token:     "maze_ci_real",
-		ExpiresAt: time.Date(2026, 6, 8, 13, 30, 0, 0, time.UTC),
-		TokenType: "Bearer",
-		Feed:      request.Feed,
-		Purpose:   request.Purpose,
-		Scopes:    []string{"read"},
+		Token:           "maze_ci_real",
+		ExpiresAt:       time.Date(2026, 6, 8, 13, 30, 0, 0, time.UTC),
+		TokenType:       "Bearer",
+		Feed:            request.Feed,
+		ExchangePurpose: request.Purpose,
+		BuildID:         "cis_recorded",
+		Scopes:          []string{"read"},
 	}, nil
 }
 
