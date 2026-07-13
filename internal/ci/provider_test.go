@@ -68,6 +68,46 @@ func TestDetectProvider(t *testing.T) {
 	}
 }
 
+func TestCircleCIClientContextUsesOnlyTheEnvironmentAllowlist(t *testing.T) {
+	context := ClientContext(ProviderCircleCI, mapLookup(map[string]string{
+		"CIRCLE_BUILD_NUM":         "42",
+		"CIRCLE_BUILD_URL":         "https://app.circleci.com/pipelines/circleci/org/project/1/workflows/workflow/jobs/42",
+		"CIRCLE_JOB":               "package-client-smoke",
+		"CIRCLE_NODE_INDEX":        "0",
+		"CIRCLE_NODE_TOTAL":        "2",
+		"CIRCLE_PIPELINE_ID":       "signed-duplicate",
+		"CIRCLE_PULL_REQUEST":      "https://github.com/packagemaze/maze-cli/pull/10",
+		"CIRCLE_PULL_REQUESTS":     "https://github.com/packagemaze/maze-cli/pull/10, https://github.com/packagemaze/maze-cli/pull/11",
+		"CIRCLE_REPOSITORY_URL":    "https://github.com/packagemaze/maze-cli",
+		"CIRCLE_SHA1":              "abcdef1234567890abcdef1234567890abcdef12",
+		"CIRCLE_USERNAME":          "must-not-be-collected",
+		"CIRCLE_WORKING_DIRECTORY": "/must/not/be/collected",
+	}))
+
+	environment, ok := context["circleci_environment"].(map[string]any)
+	if !ok {
+		t.Fatalf("circleci environment = %#v", context)
+	}
+	if len(environment) != 9 {
+		t.Fatalf("circleci allowlist = %#v", environment)
+	}
+	if _, ok := environment["CIRCLE_PIPELINE_ID"]; ok {
+		t.Fatalf("signed duplicate was collected: %#v", environment)
+	}
+	if _, ok := environment["CIRCLE_USERNAME"]; ok {
+		t.Fatalf("generic process context was collected: %#v", environment)
+	}
+	pullRequests, ok := environment["CIRCLE_PULL_REQUESTS"].([]string)
+	if !ok || len(pullRequests) != 2 {
+		t.Fatalf("pull requests = %#v", environment["CIRCLE_PULL_REQUESTS"])
+	}
+	if got := ClientContext(ProviderGitHub, mapLookup(map[string]string{
+		"CIRCLE_BUILD_NUM": "42",
+	})); got != nil {
+		t.Fatalf("non-CircleCI context = %#v", got)
+	}
+}
+
 func TestRequestGitHubOIDCToken(t *testing.T) {
 	var gotAudience string
 	var gotAuthorization string

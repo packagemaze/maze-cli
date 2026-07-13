@@ -274,6 +274,39 @@ func TestExchangeDoesNotCollectCIEnvironmentAsClientMetadata(t *testing.T) {
 	}
 }
 
+func TestExchangeCollectsCircleCIEnvironmentContext(t *testing.T) {
+	exchanger := &recordingExchanger{t: t}
+	_, _, err := Exchange(context.Background(), Config{
+		Feed:           "your-org/npm",
+		OIDCTokenStdin: true,
+		Provider:       "circleci",
+		Purpose:        "install",
+	}, Dependencies{
+		Env: mapLookup(map[string]string{
+			"CIRCLECI":           "true",
+			"CIRCLE_BUILD_NUM":   "42",
+			"CIRCLE_JOB":         "package-client-smoke",
+			"CIRCLE_PIPELINE_ID": "must-not-be-collected",
+			"CIRCLE_USERNAME":    "must-not-be-collected",
+		}),
+		Stdin:     strings.NewReader("circleci-oidc-token"),
+		Exchanger: exchanger,
+	})
+	if err != nil {
+		t.Fatalf("Exchange returned error: %v", err)
+	}
+	environment, ok := exchanger.request.Client["circleci_environment"].(map[string]any)
+	if !ok {
+		t.Fatalf("CircleCI environment = %#v", exchanger.request.Client)
+	}
+	if environment["CIRCLE_BUILD_NUM"] != "42" || environment["CIRCLE_JOB"] != "package-client-smoke" {
+		t.Fatalf("CircleCI environment = %#v", environment)
+	}
+	if len(environment) != 2 {
+		t.Fatalf("CircleCI allowlist = %#v", environment)
+	}
+}
+
 func TestExchangeRejectsInvalidClientContext(t *testing.T) {
 	tests := []string{
 		`{`,

@@ -80,6 +80,57 @@ func DetectProvider(env LookupEnv) (Provider, bool, error) {
 	return detected[0], true, nil
 }
 
+func ClientContext(provider Provider, env LookupEnv) map[string]any {
+	if provider != ProviderCircleCI {
+		return nil
+	}
+	if env == nil {
+		env = DefaultLookupEnv
+	}
+	context := map[string]any{}
+	for _, name := range []string{
+		"CIRCLE_BUILD_NUM",
+		"CIRCLE_BUILD_URL",
+		"CIRCLE_JOB",
+		"CIRCLE_NODE_INDEX",
+		"CIRCLE_NODE_TOTAL",
+		"CIRCLE_PULL_REQUEST",
+		"CIRCLE_REPOSITORY_URL",
+		"CIRCLE_SHA1",
+	} {
+		addEnvironmentValue(context, env, name)
+	}
+	if raw, ok := env("CIRCLE_PULL_REQUESTS"); ok {
+		values := splitEnvironmentList(raw)
+		if len(values) > 0 {
+			context["CIRCLE_PULL_REQUESTS"] = values
+		}
+	}
+	if len(context) == 0 {
+		return nil
+	}
+	return map[string]any{"circleci_environment": context}
+}
+
+func addEnvironmentValue(context map[string]any, env LookupEnv, name string) {
+	value, ok := env(name)
+	value = strings.TrimSpace(value)
+	if ok && value != "" {
+		context[name] = value
+	}
+}
+
+func splitEnvironmentList(value string) []string {
+	parts := strings.Split(value, ",")
+	values := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			values = append(values, trimmed)
+		}
+	}
+	return values
+}
+
 func ReadTokenFile(path string) (string, error) {
 	content, err := os.ReadFile(path)
 	if err != nil {
