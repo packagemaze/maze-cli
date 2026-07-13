@@ -124,16 +124,24 @@ func writeShell(writer io.Writer, result Result) error {
 	); err != nil {
 		return err
 	}
-	if result.BuildNumber <= 0 || strings.TrimSpace(result.BuildURL) == "" {
-		return nil
+	if result.BuildNumber != 0 {
+		if _, err := fmt.Fprintf(
+			writer,
+			"export MAZE_BUILD_NUMBER=%s\n",
+			shellQuote(fmt.Sprintf("%d", result.BuildNumber)),
+		); err != nil {
+			return err
+		}
 	}
-	_, err := fmt.Fprintf(
-		writer,
-		"export MAZE_BUILD_NUMBER=%s\nexport MAZE_BUILD_URL=%s\n",
-		shellQuote(fmt.Sprintf("%d", result.BuildNumber)),
-		shellQuote(result.BuildURL),
-	)
-	return err
+	if result.BuildURL != "" {
+		_, err := fmt.Fprintf(
+			writer,
+			"export MAZE_BUILD_URL=%s\n",
+			shellQuote(result.BuildURL),
+		)
+		return err
+	}
+	return nil
 }
 
 func writeGitHubOutput(writer io.Writer, result Result, outputName string, outputPath string) error {
@@ -150,12 +158,11 @@ func writeGitHubOutput(writer io.Writer, result Result, outputName string, outpu
 	if strings.TrimSpace(result.FeedBaseURL) != "" {
 		outputs = append(outputs, gitHubOutputValue{name: "feed_base_url", value: result.FeedBaseURL})
 	}
-	if result.BuildNumber > 0 && strings.TrimSpace(result.BuildURL) != "" {
-		outputs = append(
-			outputs,
-			gitHubOutputValue{name: "build_number", value: fmt.Sprintf("%d", result.BuildNumber)},
-			gitHubOutputValue{name: "build_url", value: result.BuildURL},
-		)
+	if result.BuildNumber != 0 {
+		outputs = append(outputs, gitHubOutputValue{name: "build_number", value: fmt.Sprintf("%d", result.BuildNumber)})
+	}
+	if result.BuildURL != "" {
+		outputs = append(outputs, gitHubOutputValue{name: "build_url", value: result.BuildURL})
 	}
 	for _, output := range outputs {
 		if err := validateGitHubOutputValue(output.name, output.value); err != nil {

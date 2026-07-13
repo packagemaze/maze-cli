@@ -45,15 +45,6 @@ type CITokenResponse struct {
 	ArtifactProtocol string
 }
 
-type ContractResponseError struct {
-	Endpoint string
-	Detail   string
-}
-
-func (e *ContractResponseError) Error() string {
-	return fmt.Sprintf("PackageMaze token exchange response from %s violated the API contract: %s", e.Endpoint, e.Detail)
-}
-
 type StatusError struct {
 	StatusCode int
 	Endpoint   string
@@ -184,20 +175,6 @@ func (c *Client) ExchangeCI(ctx context.Context, request CITokenRequest) (CIToke
 	if payload.Feed == "" {
 		payload.Feed = request.Feed
 	}
-	buildURL := strings.TrimSpace(payload.BuildURL)
-	if payload.BuildNumber == 0 && buildURL == "" {
-		// Older self-hosted PackageMaze servers may not emit a Build reference.
-	} else if payload.BuildNumber <= 0 || buildURL == "" {
-		return CITokenResponse{}, &ContractResponseError{
-			Endpoint: endpoint,
-			Detail:   "build_number and build_url must be returned together",
-		}
-	} else if parsedBuildURL, buildURLError := url.Parse(buildURL); buildURLError != nil || parsedBuildURL.Scheme == "" || parsedBuildURL.Host == "" {
-		return CITokenResponse{}, &ContractResponseError{
-			Endpoint: endpoint,
-			Detail:   "build_url was not an absolute URL",
-		}
-	}
 	exchangePurpose := strings.TrimSpace(payload.ExchangePurpose)
 	if !validCIExchangePurpose(exchangePurpose) {
 		exchangePurpose = strings.TrimSpace(payload.Purpose)
@@ -216,7 +193,7 @@ func (c *Client) ExchangeCI(ctx context.Context, request CITokenRequest) (CIToke
 		FeedBaseURL:      payload.FeedBaseURL,
 		ExchangePurpose:  exchangePurpose,
 		BuildNumber:      payload.BuildNumber,
-		BuildURL:         buildURL,
+		BuildURL:         payload.BuildURL,
 		Scopes:           payload.Scopes,
 		ArtifactProtocol: payload.ArtifactProtocol,
 	}, nil

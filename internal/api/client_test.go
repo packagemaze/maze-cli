@@ -186,7 +186,7 @@ func TestClientExchangeCIAcceptsBuildReference(t *testing.T) {
 	}
 }
 
-func TestClientExchangeCIRejectsIncompleteBuildReference(t *testing.T) {
+func TestClientExchangeCIPassesThroughIncompleteBuildReference(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		_, _ = writer.Write([]byte(`{
 			"token":"maze_ci_token",
@@ -197,15 +197,18 @@ func TestClientExchangeCIRejectsIncompleteBuildReference(t *testing.T) {
 	}))
 	defer server.Close()
 
-	_, err := NewClient(server.URL, server.Client()).ExchangeCI(context.Background(), CITokenRequest{
+	response, err := NewClient(server.URL, server.Client()).ExchangeCI(context.Background(), CITokenRequest{
 		Provider: "manual", Feed: "your-org/npm", Purpose: "install", Audience: "https://api.packagemaze.com", OIDCToken: "oidc-secret",
 	})
-	if err == nil || !strings.Contains(err.Error(), "must be returned together") {
-		t.Fatalf("expected incomplete Build reference error, got %v", err)
+	if err != nil {
+		t.Fatalf("ExchangeCI returned error: %v", err)
+	}
+	if response.BuildNumber != 482 || response.BuildURL != "" {
+		t.Fatalf("Build reference = %#v", response)
 	}
 }
 
-func TestClientExchangeCIRejectsInvalidBuildURL(t *testing.T) {
+func TestClientExchangeCIPassesThroughServerBuildURL(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		_, _ = writer.Write([]byte(`{
 			"token":"maze_ci_token",
@@ -217,15 +220,14 @@ func TestClientExchangeCIRejectsInvalidBuildURL(t *testing.T) {
 	}))
 	defer server.Close()
 
-	_, err := NewClient(server.URL, server.Client()).ExchangeCI(context.Background(), CITokenRequest{
+	response, err := NewClient(server.URL, server.Client()).ExchangeCI(context.Background(), CITokenRequest{
 		Provider: "manual", Feed: "your-org/npm", Purpose: "install", Audience: "https://api.packagemaze.com", OIDCToken: "oidc-secret",
 	})
-	if err == nil || !strings.Contains(err.Error(), "absolute URL") {
-		t.Fatalf("expected invalid Build URL error, got %v", err)
+	if err != nil {
+		t.Fatalf("ExchangeCI returned error: %v", err)
 	}
-	var contractError *ContractResponseError
-	if !errors.As(err, &contractError) {
-		t.Fatalf("expected ContractResponseError, got %T", err)
+	if response.BuildNumber != 482 || response.BuildURL != "/your-org/builds/482" {
+		t.Fatalf("Build reference = %#v", response)
 	}
 }
 
