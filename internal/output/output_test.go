@@ -18,7 +18,8 @@ func testResult() Result {
 		Feed:             "your-org/npm",
 		FeedBaseURL:      "https://pkg.packagemaze.com/your-org/npm",
 		Purpose:          "install",
-		BuildID:          "cis_0123456789abcdef",
+		BuildNumber:      482,
+		BuildURL:         "https://www.packagemaze.com/your-org/builds/482",
 		Scopes:           []string{"read"},
 		Provider:         "github",
 		ArtifactProtocol: "npm",
@@ -59,14 +60,15 @@ func TestWriteJSON(t *testing.T) {
 	if payload["feed_base_url"] != "https://pkg.packagemaze.com/your-org/npm" {
 		t.Fatalf("feed_base_url = %v", payload["feed_base_url"])
 	}
-	if payload["build_id"] != "cis_0123456789abcdef" || payload["ci_session_id"] != "cis_0123456789abcdef" {
-		t.Fatalf("Build identifiers = %#v", payload)
+	if payload["build_number"] != float64(482) || payload["build_url"] != "https://www.packagemaze.com/your-org/builds/482" {
+		t.Fatalf("Build reference = %#v", payload)
 	}
 }
 
-func TestWriteStructuredOutputOmitsBuildAliasesWhenUnavailable(t *testing.T) {
+func TestWriteStructuredOutputOmitsBuildReferenceWhenUnavailable(t *testing.T) {
 	result := testResult()
-	result.BuildID = ""
+	result.BuildNumber = 0
+	result.BuildURL = ""
 
 	var jsonOutput bytes.Buffer
 	if err := Write(result, WriteConfig{Format: FormatJSON, Stdout: &jsonOutput}); err != nil {
@@ -76,19 +78,80 @@ func TestWriteStructuredOutputOmitsBuildAliasesWhenUnavailable(t *testing.T) {
 	if err := json.Unmarshal(jsonOutput.Bytes(), &payload); err != nil {
 		t.Fatalf("decode JSON: %v", err)
 	}
-	if _, exists := payload["build_id"]; exists {
-		t.Fatalf("build_id should be omitted: %#v", payload)
+	if _, exists := payload["build_number"]; exists {
+		t.Fatalf("build_number should be omitted: %#v", payload)
 	}
-	if _, exists := payload["ci_session_id"]; exists {
-		t.Fatalf("ci_session_id should be omitted: %#v", payload)
+	if _, exists := payload["build_url"]; exists {
+		t.Fatalf("build_url should be omitted: %#v", payload)
 	}
 
 	var shellOutput bytes.Buffer
 	if err := Write(result, WriteConfig{Format: FormatShell, Stdout: &shellOutput}); err != nil {
 		t.Fatalf("write shell: %v", err)
 	}
-	if strings.Contains(shellOutput.String(), "MAZE_BUILD_ID") || strings.Contains(shellOutput.String(), "MAZE_CI_SESSION_ID") {
+	if strings.Contains(shellOutput.String(), "MAZE_BUILD_NUMBER") || strings.Contains(shellOutput.String(), "MAZE_BUILD_URL") {
 		t.Fatalf("Build exports should be omitted: %q", shellOutput.String())
+	}
+}
+
+func TestWriteStructuredOutputPassesThroughServerBuildFieldsIndependently(t *testing.T) {
+	tests := []struct {
+		name              string
+		buildNumber       int64
+		buildURL          string
+		wantShell         string
+		wantGitHubOutput  string
+		unwantedShellText string
+	}{
+		{
+			name:              "number only",
+			buildNumber:       482,
+			wantShell:         "export MAZE_BUILD_NUMBER='482'",
+			wantGitHubOutput:  "build_number=482\n",
+			unwantedShellText: "MAZE_BUILD_URL",
+		},
+		{
+			name:              "url only",
+			buildURL:          "/your-org/builds/482",
+			wantShell:         "export MAZE_BUILD_URL='/your-org/builds/482'",
+			wantGitHubOutput:  "build_url=/your-org/builds/482\n",
+			unwantedShellText: "MAZE_BUILD_NUMBER",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := testResult()
+			result.BuildNumber = test.buildNumber
+			result.BuildURL = test.buildURL
+
+			var shellOutput bytes.Buffer
+			if err := Write(result, WriteConfig{Format: FormatShell, Stdout: &shellOutput}); err != nil {
+				t.Fatalf("write shell: %v", err)
+			}
+			if !strings.Contains(shellOutput.String(), test.wantShell) {
+				t.Fatalf("shell output = %q", shellOutput.String())
+			}
+			if strings.Contains(shellOutput.String(), test.unwantedShellText) {
+				t.Fatalf("shell output = %q", shellOutput.String())
+			}
+
+			outputPath := filepath.Join(t.TempDir(), "github-output")
+			if err := Write(result, WriteConfig{
+				Format:           FormatGitHubOutput,
+				OutputName:       "package_token",
+				GitHubOutputPath: outputPath,
+			}); err != nil {
+				t.Fatalf("write GitHub output: %v", err)
+			}
+			content, err := os.ReadFile(outputPath)
+			if err != nil {
+				t.Fatalf("read GitHub output: %v", err)
+			}
+			if !strings.Contains(string(content), test.wantGitHubOutput) {
+				t.Fatalf("GitHub output = %q", string(content))
+			}
+		})
 	}
 }
 
@@ -114,10 +177,10 @@ func TestWriteShell(t *testing.T) {
 	if !strings.Contains(stdout.String(), `export MAZE_ARTIFACT_PROTOCOL='npm'`) {
 		t.Fatalf("stdout = %q", stdout.String())
 	}
-	if !strings.Contains(stdout.String(), `export MAZE_BUILD_ID='cis_0123456789abcdef'`) {
+	if !strings.Contains(stdout.String(), `export MAZE_BUILD_NUMBER='482'`) {
 		t.Fatalf("stdout = %q", stdout.String())
 	}
-	if !strings.Contains(stdout.String(), `export MAZE_CI_SESSION_ID='cis_0123456789abcdef'`) {
+	if !strings.Contains(stdout.String(), `export MAZE_BUILD_URL='https://www.packagemaze.com/your-org/builds/482'`) {
 		t.Fatalf("stdout = %q", stdout.String())
 	}
 }
@@ -137,7 +200,7 @@ func TestWriteGitHubOutputMasksAndWritesOutputFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read output file: %v", err)
 	}
-	if string(content) != "package_token=maze_ci_secret\nartifact_protocol=npm\nfeed_base_url=https://pkg.packagemaze.com/your-org/npm\nbuild_id=cis_0123456789abcdef\nci_session_id=cis_0123456789abcdef\n" {
+	if string(content) != "package_token=maze_ci_secret\nartifact_protocol=npm\nfeed_base_url=https://pkg.packagemaze.com/your-org/npm\nbuild_number=482\nbuild_url=https://www.packagemaze.com/your-org/builds/482\n" {
 		t.Fatalf("output file = %q", string(content))
 	}
 	if stdout.String() != "::add-mask::maze_ci_secret\n" {

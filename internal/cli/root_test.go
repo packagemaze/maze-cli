@@ -119,8 +119,8 @@ func TestExchangeOIDCCommandJSONAlias(t *testing.T) {
 	if payload["token"] != "maze_ci_real" {
 		t.Fatalf("token = %v", payload["token"])
 	}
-	if payload["build_id"] != "cis_recorded" || payload["ci_session_id"] != "cis_recorded" {
-		t.Fatalf("Build identifiers = %#v", payload)
+	if payload["build_number"] != float64(482) || payload["build_url"] != "https://www.packagemaze.com/your-org/builds/482" {
+		t.Fatalf("Build reference = %#v", payload)
 	}
 }
 
@@ -249,7 +249,8 @@ func (f *recordingExchanger) ExchangeCI(_ context.Context, request api.CITokenRe
 		TokenType:       "Bearer",
 		Feed:            request.Feed,
 		ExchangePurpose: request.Purpose,
-		BuildID:         "cis_recorded",
+		BuildNumber:     482,
+		BuildURL:        "https://www.packagemaze.com/your-org/builds/482",
 		Scopes:          []string{"read"},
 	}, nil
 }

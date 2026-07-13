@@ -12,10 +12,8 @@ The API client and command end-to-end tests consume this same fixture. Update
 it alongside intentional PackageMaze contract changes so field-name, structured
 error, and exchange-purpose drift fails in one of those layers.
 
-Successful responses carry preferred `build_id` and compatibility
-`ci_session_id` with the same server-derived value. The client accepts either
-during a rolling upgrade and rejects a response where both identify different
-Builds.
+Successful responses carry the Organization-scoped `build_number` and canonical
+server-derived `build_url`.
 
 `setup_invocation_id` is caller-supplied, non-secret correlation metadata. Its
 provenance prefix is useful to humans but is not provider-signed Build evidence

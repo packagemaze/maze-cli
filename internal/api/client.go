@@ -39,18 +39,10 @@ type CITokenResponse struct {
 	Feed             string
 	FeedBaseURL      string
 	ExchangePurpose  string
-	BuildID          string
+	BuildNumber      int64
+	BuildURL         string
 	Scopes           []string
 	ArtifactProtocol string
-}
-
-type ContractResponseError struct {
-	Endpoint string
-	Detail   string
-}
-
-func (e *ContractResponseError) Error() string {
-	return fmt.Sprintf("PackageMaze token exchange response from %s violated the API contract: %s", e.Endpoint, e.Detail)
 }
 
 type StatusError struct {
@@ -162,8 +154,8 @@ func (c *Client) ExchangeCI(ctx context.Context, request CITokenRequest) (CIToke
 		FeedBaseURL      string   `json:"feed_base_url"`
 		Purpose          string   `json:"purpose"`
 		ExchangePurpose  string   `json:"exchange_purpose"`
-		BuildID          string   `json:"build_id"`
-		CISessionID      string   `json:"ci_session_id"`
+		BuildNumber      int64    `json:"build_number"`
+		BuildURL         string   `json:"build_url"`
 		Scopes           []string `json:"scopes"`
 		ArtifactProtocol string   `json:"artifact_protocol"`
 	}
@@ -183,17 +175,6 @@ func (c *Client) ExchangeCI(ctx context.Context, request CITokenRequest) (CIToke
 	if payload.Feed == "" {
 		payload.Feed = request.Feed
 	}
-	buildID := strings.TrimSpace(payload.BuildID)
-	ciSessionID := strings.TrimSpace(payload.CISessionID)
-	if buildID != "" && ciSessionID != "" && buildID != ciSessionID {
-		return CITokenResponse{}, &ContractResponseError{
-			Endpoint: endpoint,
-			Detail:   "build_id and ci_session_id identified different Builds",
-		}
-	}
-	if buildID == "" {
-		buildID = ciSessionID
-	}
 	exchangePurpose := strings.TrimSpace(payload.ExchangePurpose)
 	if !validCIExchangePurpose(exchangePurpose) {
 		exchangePurpose = strings.TrimSpace(payload.Purpose)
@@ -211,7 +192,8 @@ func (c *Client) ExchangeCI(ctx context.Context, request CITokenRequest) (CIToke
 		Feed:             payload.Feed,
 		FeedBaseURL:      payload.FeedBaseURL,
 		ExchangePurpose:  exchangePurpose,
-		BuildID:          buildID,
+		BuildNumber:      payload.BuildNumber,
+		BuildURL:         payload.BuildURL,
 		Scopes:           payload.Scopes,
 		ArtifactProtocol: payload.ArtifactProtocol,
 	}, nil

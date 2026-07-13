@@ -55,9 +55,8 @@ items below are deliberately addressed.
   `setup_invocation_id` request field with tested flag-over-environment
   precedence; the CLI does not collect CI environment metadata automatically,
   and explicit legacy client metadata is not treated as Build evidence.
-- [x] Exchange responses accept preferred `build_id` and compatibility
-  `ci_session_id`, reject contradictory aliases, and expose the server-derived
-  handle in machine output without changing token-only stdout.
+- [x] Exchange responses expose the server-derived `build_number` and canonical
+  `build_url` in machine output without changing token-only stdout.
 - [x] The API Domain exposes `POST /v1/auth/ci-token` with the same names used
   by CLI and future MCP capabilities.
 - [ ] CI provider trust rules are testable with GitHub Actions, GitLab CI/CD,

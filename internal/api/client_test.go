@@ -113,8 +113,8 @@ func TestClientExchangeCISendsRequestAndParsesResponse(t *testing.T) {
 	if response.ExchangePurpose != "install" {
 		t.Fatalf("exchange purpose = %q", response.ExchangePurpose)
 	}
-	if response.BuildID != "cis_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" {
-		t.Fatalf("build id = %q", response.BuildID)
+	if response.BuildNumber != 482 || response.BuildURL != "https://www.packagemaze.com/your-org/builds/482" {
+		t.Fatalf("Build reference = %#v", response)
 	}
 }
 
@@ -163,13 +163,14 @@ func TestClientExchangeCIDoesNotExposeStoredTokenPurposeAsExchangePurpose(t *tes
 	}
 }
 
-func TestClientExchangeCIAcceptsCompatibilityCISessionID(t *testing.T) {
+func TestClientExchangeCIAcceptsBuildReference(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		_, _ = writer.Write([]byte(`{
 			"token":"maze_ci_token",
 			"expires_at":"2026-06-08T12:30:00Z",
 			"purpose":"install",
-			"ci_session_id":"cis_compatibility"
+			"build_number":482,
+			"build_url":"https://www.packagemaze.com/your-org/builds/482"
 		}`))
 	}))
 	defer server.Close()
@@ -180,18 +181,18 @@ func TestClientExchangeCIAcceptsCompatibilityCISessionID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExchangeCI returned error: %v", err)
 	}
-	if response.BuildID != "cis_compatibility" {
-		t.Fatalf("build id = %q", response.BuildID)
+	if response.BuildNumber != 482 || response.BuildURL != "https://www.packagemaze.com/your-org/builds/482" {
+		t.Fatalf("Build reference = %#v", response)
 	}
 }
 
-func TestClientExchangeCIAcceptsPreferredBuildIDWithoutCompatibilityAlias(t *testing.T) {
+func TestClientExchangeCIPassesThroughIncompleteBuildReference(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		_, _ = writer.Write([]byte(`{
 			"token":"maze_ci_token",
 			"expires_at":"2026-06-08T12:30:00Z",
 			"purpose":"install",
-			"build_id":"cis_preferred"
+			"build_number":482
 		}`))
 	}))
 	defer server.Close()
@@ -202,32 +203,31 @@ func TestClientExchangeCIAcceptsPreferredBuildIDWithoutCompatibilityAlias(t *tes
 	if err != nil {
 		t.Fatalf("ExchangeCI returned error: %v", err)
 	}
-	if response.BuildID != "cis_preferred" {
-		t.Fatalf("build id = %q", response.BuildID)
+	if response.BuildNumber != 482 || response.BuildURL != "" {
+		t.Fatalf("Build reference = %#v", response)
 	}
 }
 
-func TestClientExchangeCIRejectsContradictoryBuildIdentifiers(t *testing.T) {
+func TestClientExchangeCIPassesThroughServerBuildURL(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		_, _ = writer.Write([]byte(`{
 			"token":"maze_ci_token",
 			"expires_at":"2026-06-08T12:30:00Z",
 			"purpose":"install",
-			"build_id":"cis_build",
-			"ci_session_id":"cis_other"
+			"build_number":482,
+			"build_url":"/your-org/builds/482"
 		}`))
 	}))
 	defer server.Close()
 
-	_, err := NewClient(server.URL, server.Client()).ExchangeCI(context.Background(), CITokenRequest{
+	response, err := NewClient(server.URL, server.Client()).ExchangeCI(context.Background(), CITokenRequest{
 		Provider: "manual", Feed: "your-org/npm", Purpose: "install", Audience: "https://api.packagemaze.com", OIDCToken: "oidc-secret",
 	})
-	if err == nil || !strings.Contains(err.Error(), "identified different Builds") {
-		t.Fatalf("expected contradictory Build identifiers error, got %v", err)
+	if err != nil {
+		t.Fatalf("ExchangeCI returned error: %v", err)
 	}
-	var contractError *ContractResponseError
-	if !errors.As(err, &contractError) {
-		t.Fatalf("expected ContractResponseError, got %T", err)
+	if response.BuildNumber != 482 || response.BuildURL != "/your-org/builds/482" {
+		t.Fatalf("Build reference = %#v", response)
 	}
 }
 
