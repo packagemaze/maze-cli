@@ -91,6 +91,10 @@ func Exchange(ctx context.Context, config Config, deps Dependencies) (output.Res
 	if err != nil {
 		return output.Result{}, ResolvedConfig{}, err
 	}
+	clientContext = mergeClientContext(
+		clientContext,
+		ci.ClientContext(resolved.ProviderValue, deps.Env),
+	)
 	exchanger := deps.Exchanger
 	if exchanger == nil {
 		httpClient := deps.HTTPClient
@@ -244,6 +248,26 @@ func parseClientContext(value string) (map[string]any, error) {
 		return nil, fmt.Errorf("--client-context-json must be a JSON object")
 	}
 	return payload, nil
+}
+
+func mergeClientContext(
+	legacy map[string]any,
+	automatic map[string]any,
+) map[string]any {
+	if len(legacy) == 0 {
+		return automatic
+	}
+	if len(automatic) == 0 {
+		return legacy
+	}
+	merged := make(map[string]any, len(legacy)+len(automatic))
+	for key, value := range legacy {
+		merged[key] = value
+	}
+	for key, value := range automatic {
+		merged[key] = value
+	}
+	return merged
 }
 
 func githubOutputNameReserved(name string) bool {

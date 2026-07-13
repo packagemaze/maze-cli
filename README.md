@@ -240,6 +240,12 @@ Then run:
 maze auth exchange-oidc --feed <organization>/<feed> --purpose install
 ```
 
+The command also sends a fixed, non-secret allowlist of CircleCI's built-in job
+environment for Build reporting: job number and URL, job name, parallel node
+position, pull request and repository URLs, and commit SHA. PackageMaze validates
+this context against the signed CircleCI identity where possible and labels it
+as client reported; it never affects CI access rules or Token scopes.
+
 ## Manual Token Input
 
 Manual mode avoids a plain `--oidc-token` flag so token values do not leak into
