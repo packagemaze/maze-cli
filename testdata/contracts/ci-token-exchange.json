@@ -15,8 +15,8 @@
     "feed": "your-org/npm",
     "feed_base_url": "https://pkg.packagemaze.com/your-org/npm",
     "purpose": "install",
-    "build_id": "cis_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-    "ci_session_id": "cis_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "build_number": 482,
+    "build_url": "https://www.packagemaze.com/your-org/builds/482",
     "scopes": [
       "read"
     ],

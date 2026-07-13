@@ -81,17 +81,12 @@ caller-supplied and unverified; it is not the Build evidence or correlation
 contract. As of v0.0.4 the CLI no longer collects or sends CI environment
 metadata automatically.
 
-PackageMaze returns the server-derived Build handle separately. JSON,
-`github-output`, and shell output prefer `build_id` while also emitting the
-identical compatibility alias `ci_session_id`. Shell output names them
-`MAZE_BUILD_ID` and `MAZE_CI_SESSION_ID`. Token-only output remains exactly the
-Token Secret followed by a newline. Use `build_id` with PackageMaze's Build
-Report surfaces; do not derive it from `setup_invocation_id`.
-
-The Hosted MCP compatibility capability remains `get_ci_session_report` and
-currently names its input `ci_session_id`. Pass the identical server-derived
-handle emitted by the CLI; the compatibility name does not turn it into a
-different object from the Build.
+PackageMaze returns the server-derived human-facing Build reference separately.
+JSON, `github-output`, and shell output emit `build_number` and canonical
+`build_url`; shell output names them `MAZE_BUILD_NUMBER` and `MAZE_BUILD_URL`.
+Token-only output remains exactly the Token Secret followed by a newline. Use
+the URL with PackageMaze's Build Report surfaces; do not derive either value
+from `setup_invocation_id`.
 
 The response `purpose` remains the requested exchange purpose (`install`,
 `publish`, `docker-build`, or `test`). PackageMaze stores the resulting
@@ -197,17 +192,17 @@ maze auth exchange-oidc \
 ```
 
 The `github-output` format writes the requested Token output plus
-`artifact_protocol`, `feed_base_url`, `build_id`, and the compatibility
-`ci_session_id` so wrapper actions can choose protocol-specific setup, use
+`artifact_protocol`, `feed_base_url`, `build_number`, and `build_url` so wrapper
+actions can choose protocol-specific setup, use
 canonical registry URLs, and link users or Agents to the exact Build without
 asking workflows to duplicate Feed metadata.
 
 The `shell` format writes `MAZE_TOKEN`, `MAZE_TOKEN_EXPIRES_AT`, `MAZE_FEED`,
 `MAZE_FEED_BASE_URL`, `MAZE_PURPOSE`, `MAZE_ARTIFACT_PROTOCOL`,
-`MAZE_BUILD_ID`, and compatibility `MAZE_CI_SESSION_ID` exports for wrapper
+`MAZE_BUILD_NUMBER`, and `MAZE_BUILD_URL` exports for wrapper
 actions that need to consume exchange metadata without using GitHub step
 outputs. Build exports are omitted when an older PackageMaze deployment does
-not return a Build handle during a rolling upgrade.
+not return a Build reference during a rolling upgrade.
 
 ## GitLab CI/CD
 

@@ -123,7 +123,8 @@ func Exchange(ctx context.Context, config Config, deps Dependencies) (output.Res
 		Feed:             fallback(response.Feed, resolved.Feed),
 		FeedBaseURL:      response.FeedBaseURL,
 		Purpose:          fallback(response.ExchangePurpose, resolved.Purpose),
-		BuildID:          response.BuildID,
+		BuildNumber:      response.BuildNumber,
+		BuildURL:         response.BuildURL,
 		Package:          packageName,
 		Scopes:           response.Scopes,
 		Provider:         string(resolved.ProviderValue),
@@ -272,7 +273,7 @@ func mergeClientContext(
 
 func githubOutputNameReserved(name string) bool {
 	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "artifact_protocol", "build_id", "ci_session_id", "feed_base_url":
+	case "artifact_protocol", "build_number", "build_url", "feed_base_url":
 		return true
 	default:
 		return false

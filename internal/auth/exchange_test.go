@@ -95,18 +95,18 @@ func TestResolveValidation(t *testing.T) {
 				Feed:       "your-org/npm",
 				Purpose:    "install",
 				Format:     string(output.FormatGitHubOutput),
-				OutputName: "build_id",
+				OutputName: "build_number",
 			},
 			wantErr: "reserved",
 		},
 		{
-			name: "github output name collides with compatibility Build metadata",
+			name: "github output name collides with Build URL metadata",
 			config: Config{
 				Provider:   "manual",
 				Feed:       "your-org/npm",
 				Purpose:    "install",
 				Format:     string(output.FormatGitHubOutput),
-				OutputName: "ci_session_id",
+				OutputName: "build_url",
 			},
 			wantErr: "reserved",
 		},
@@ -170,8 +170,8 @@ func TestExchangeManualEnvTokenCallsBackend(t *testing.T) {
 	if result.FeedBaseURL != "https://pkg.packagemaze.com/your-org/npm" {
 		t.Fatalf("feed_base_url = %q", result.FeedBaseURL)
 	}
-	if result.BuildID != "cis_recorded" {
-		t.Fatalf("build id = %q", result.BuildID)
+	if result.BuildNumber != 482 || result.BuildURL != "https://www.packagemaze.com/your-org/builds/482" {
+		t.Fatalf("Build reference = %#v", result)
 	}
 }
 
@@ -369,7 +369,8 @@ func (f *recordingExchanger) ExchangeCI(_ context.Context, request api.CITokenRe
 		Feed:             request.Feed,
 		FeedBaseURL:      "https://pkg.packagemaze.com/" + request.Feed,
 		ExchangePurpose:  request.Purpose,
-		BuildID:          "cis_recorded",
+		BuildNumber:      482,
+		BuildURL:         "https://www.packagemaze.com/your-org/builds/482",
 		Scopes:           []string{"publish"},
 		ArtifactProtocol: "npm",
 	}, nil

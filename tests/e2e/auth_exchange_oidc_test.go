@@ -158,8 +158,8 @@ func TestExchangeOIDCAgainstLocalBackendAPI(t *testing.T) {
 	if output.FeedBaseURL != "https://pkg.packagemaze.com/your-org/npm" {
 		t.Fatalf("feed_base_url = %q", output.FeedBaseURL)
 	}
-	if output.BuildID != contractSuccess.BuildID || output.CISessionID != contractSuccess.BuildID {
-		t.Fatalf("Build identifiers = %#v", output)
+	if output.BuildNumber != contractSuccess.BuildNumber || output.BuildURL != contractSuccess.BuildURL {
+		t.Fatalf("Build reference = %#v", output)
 	}
 	if strings.Join(output.Scopes, ",") != "read" {
 		t.Fatalf("scopes = %#v", output.Scopes)
@@ -207,8 +207,8 @@ func TestExchangeOIDCGitHubOutputAgainstLocalBackendAPI(t *testing.T) {
 			"feed": "your-org/npm",
 			"feed_base_url": "https://pkg.packagemaze.com/your-org/npm",
 			"purpose": "docker-build",
-			"build_id": "cis_github_output",
-			"ci_session_id": "cis_github_output",
+			"build_number": 482,
+			"build_url": "https://www.packagemaze.com/your-org/builds/482",
 			"scopes": ["read"],
 			"artifact_protocol": "npm"
 		}`))
@@ -292,8 +292,8 @@ func TestExchangeOIDCGitHubOutputAgainstLocalBackendAPI(t *testing.T) {
 	want := "package_token=" + packageMazeToken + "\n" +
 		"artifact_protocol=npm\n" +
 		"feed_base_url=https://pkg.packagemaze.com/your-org/npm\n" +
-		"build_id=cis_github_output\n" +
-		"ci_session_id=cis_github_output\n"
+		"build_number=482\n" +
+		"build_url=https://www.packagemaze.com/your-org/builds/482\n"
 	if string(outputFile) != want {
 		t.Fatalf("GITHUB_OUTPUT = %q, want %q", string(outputFile), want)
 	}
@@ -320,8 +320,8 @@ type tokenExchangeOutput struct {
 	Scopes           []string `json:"scopes"`
 	ArtifactProtocol string   `json:"artifact_protocol"`
 	FeedBaseURL      string   `json:"feed_base_url"`
-	BuildID          string   `json:"build_id"`
-	CISessionID      string   `json:"ci_session_id"`
+	BuildNumber      int64    `json:"build_number"`
+	BuildURL         string   `json:"build_url"`
 }
 
 type ciTokenContractFixture struct {

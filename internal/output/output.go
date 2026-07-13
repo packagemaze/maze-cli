@@ -25,7 +25,8 @@ type Result struct {
 	Feed             string
 	FeedBaseURL      string
 	Purpose          string
-	BuildID          string
+	BuildNumber      int64
+	BuildURL         string
 	Package          string
 	Scopes           []string
 	Provider         string
@@ -85,8 +86,8 @@ func writeJSON(writer io.Writer, result Result) error {
 		Feed             string   `json:"feed"`
 		FeedBaseURL      string   `json:"feed_base_url,omitempty"`
 		Purpose          string   `json:"purpose"`
-		BuildID          string   `json:"build_id,omitempty"`
-		CISessionID      string   `json:"ci_session_id,omitempty"`
+		BuildNumber      int64    `json:"build_number,omitempty"`
+		BuildURL         string   `json:"build_url,omitempty"`
 		Package          string   `json:"package,omitempty"`
 		Scopes           []string `json:"scopes"`
 		Provider         string   `json:"provider"`
@@ -98,8 +99,8 @@ func writeJSON(writer io.Writer, result Result) error {
 		Feed:             result.Feed,
 		FeedBaseURL:      result.FeedBaseURL,
 		Purpose:          result.Purpose,
-		BuildID:          result.BuildID,
-		CISessionID:      result.BuildID,
+		BuildNumber:      result.BuildNumber,
+		BuildURL:         result.BuildURL,
 		Package:          result.Package,
 		Scopes:           result.Scopes,
 		Provider:         result.Provider,
@@ -123,14 +124,14 @@ func writeShell(writer io.Writer, result Result) error {
 	); err != nil {
 		return err
 	}
-	if strings.TrimSpace(result.BuildID) == "" {
+	if result.BuildNumber <= 0 || strings.TrimSpace(result.BuildURL) == "" {
 		return nil
 	}
 	_, err := fmt.Fprintf(
 		writer,
-		"export MAZE_BUILD_ID=%s\nexport MAZE_CI_SESSION_ID=%s\n",
-		shellQuote(result.BuildID),
-		shellQuote(result.BuildID),
+		"export MAZE_BUILD_NUMBER=%s\nexport MAZE_BUILD_URL=%s\n",
+		shellQuote(fmt.Sprintf("%d", result.BuildNumber)),
+		shellQuote(result.BuildURL),
 	)
 	return err
 }
@@ -149,11 +150,11 @@ func writeGitHubOutput(writer io.Writer, result Result, outputName string, outpu
 	if strings.TrimSpace(result.FeedBaseURL) != "" {
 		outputs = append(outputs, gitHubOutputValue{name: "feed_base_url", value: result.FeedBaseURL})
 	}
-	if strings.TrimSpace(result.BuildID) != "" {
+	if result.BuildNumber > 0 && strings.TrimSpace(result.BuildURL) != "" {
 		outputs = append(
 			outputs,
-			gitHubOutputValue{name: "build_id", value: result.BuildID},
-			gitHubOutputValue{name: "ci_session_id", value: result.BuildID},
+			gitHubOutputValue{name: "build_number", value: fmt.Sprintf("%d", result.BuildNumber)},
+			gitHubOutputValue{name: "build_url", value: result.BuildURL},
 		)
 	}
 	for _, output := range outputs {

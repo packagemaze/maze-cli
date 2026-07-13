@@ -39,7 +39,8 @@ type CITokenResponse struct {
 	Feed             string
 	FeedBaseURL      string
 	ExchangePurpose  string
-	BuildID          string
+	BuildNumber      int64
+	BuildURL         string
 	Scopes           []string
 	ArtifactProtocol string
 }
@@ -162,8 +163,8 @@ func (c *Client) ExchangeCI(ctx context.Context, request CITokenRequest) (CIToke
 		FeedBaseURL      string   `json:"feed_base_url"`
 		Purpose          string   `json:"purpose"`
 		ExchangePurpose  string   `json:"exchange_purpose"`
-		BuildID          string   `json:"build_id"`
-		CISessionID      string   `json:"ci_session_id"`
+		BuildNumber      int64    `json:"build_number"`
+		BuildURL         string   `json:"build_url"`
 		Scopes           []string `json:"scopes"`
 		ArtifactProtocol string   `json:"artifact_protocol"`
 	}
@@ -183,16 +184,19 @@ func (c *Client) ExchangeCI(ctx context.Context, request CITokenRequest) (CIToke
 	if payload.Feed == "" {
 		payload.Feed = request.Feed
 	}
-	buildID := strings.TrimSpace(payload.BuildID)
-	ciSessionID := strings.TrimSpace(payload.CISessionID)
-	if buildID != "" && ciSessionID != "" && buildID != ciSessionID {
+	buildURL := strings.TrimSpace(payload.BuildURL)
+	if payload.BuildNumber == 0 && buildURL == "" {
+		// Older self-hosted PackageMaze servers may not emit a Build reference.
+	} else if payload.BuildNumber <= 0 || buildURL == "" {
 		return CITokenResponse{}, &ContractResponseError{
 			Endpoint: endpoint,
-			Detail:   "build_id and ci_session_id identified different Builds",
+			Detail:   "build_number and build_url must be returned together",
 		}
-	}
-	if buildID == "" {
-		buildID = ciSessionID
+	} else if parsedBuildURL, buildURLError := url.Parse(buildURL); buildURLError != nil || parsedBuildURL.Scheme == "" || parsedBuildURL.Host == "" {
+		return CITokenResponse{}, &ContractResponseError{
+			Endpoint: endpoint,
+			Detail:   "build_url was not an absolute URL",
+		}
 	}
 	exchangePurpose := strings.TrimSpace(payload.ExchangePurpose)
 	if !validCIExchangePurpose(exchangePurpose) {
@@ -211,7 +215,8 @@ func (c *Client) ExchangeCI(ctx context.Context, request CITokenRequest) (CIToke
 		Feed:             payload.Feed,
 		FeedBaseURL:      payload.FeedBaseURL,
 		ExchangePurpose:  exchangePurpose,
-		BuildID:          buildID,
+		BuildNumber:      payload.BuildNumber,
+		BuildURL:         buildURL,
 		Scopes:           payload.Scopes,
 		ArtifactProtocol: payload.ArtifactProtocol,
 	}, nil
