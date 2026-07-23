@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - .github/workflows/release.yml
+      - .github/scripts/**
       - cmd/**
       - docs/**
       - internal/**
@@ -91,6 +92,8 @@ jobs:
       id-token: write
 
     steps:
+      - uses: actions/checkout@v7.0.0
+
       - uses: actions/download-artifact@v8.0.1
         with:
           name: maze-cli-release-assets
@@ -105,23 +108,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ needs.build.outputs.release_tag }}
           VERSION: ${{ needs.build.outputs.version }}
-        run: |
-          set -euo pipefail
-          notes_file="$(mktemp)"
-          cat > "$notes_file" <<EOF
-          PackageMaze maze CLI ${VERSION}
-
-          Assets:
-          - maze_linux_amd64.tar.gz
-          - maze_linux_arm64.tar.gz
-          - maze_darwin_arm64.tar.gz
-          - maze_checksums.txt
-
-          Windows binaries are intentionally deferred.
-          EOF
-
-          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
-          else
-            gh release create "$RELEASE_TAG" dist/* --target "$GITHUB_SHA" --title "maze ${VERSION}" --notes-file "$notes_file" --repo "$GITHUB_REPOSITORY"
-          fi
+        run: bash .github/scripts/publish-release.sh
