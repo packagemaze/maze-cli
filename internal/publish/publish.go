@@ -21,14 +21,15 @@ import (
 	"time"
 
 	"github.com/packagemaze/maze-cli/internal/ci"
+	"github.com/packagemaze/maze-cli/internal/version"
 )
 
 const (
-	DefaultPackageClientURL = "https://pkg.packagemaze.com"
-	DefaultTokenEnv         = "MAZE_TOKEN"
-	maxR2MultipartParts     = 10_000
-	maxR2PartSizeBytes      = 64 * 1024 * 1024
-	minR2PartSizeBytes      = 5 * 1024 * 1024
+	DefaultPackageClientURL   = "https://pkg.packagemaze.com"
+	DefaultTokenEnv           = "MAZE_TOKEN"
+	maxMultipartParts         = 10_000
+	maxMultipartPartSizeBytes = 64 * 1024 * 1024
+	minMultipartPartSizeBytes = 5 * 1024 * 1024
 )
 
 var feedPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$`)
@@ -71,12 +72,12 @@ type Uploader interface {
 }
 
 type UploadOptions struct {
-	ServerCreated bool
+	UsePreparedUpload bool
 }
 
 type UploadResult struct {
-	PartCount  int
-	R2UploadID string
+	PartCount int
+	UploadID  string
 }
 
 type Format string
@@ -145,7 +146,7 @@ type PlannedArtifact struct {
 	Upload struct {
 		Kind          string `json:"kind"`
 		PartSizeBytes int64  `json:"part_size_bytes"`
-		R2UploadID    string `json:"r2_upload_id,omitempty"`
+		UploadID      string `json:"upload_id,omitempty"`
 		Target        struct {
 			Bucket      string `json:"bucket"`
 			Credentials struct {
@@ -281,7 +282,7 @@ func Run(ctx context.Context, config Config, paths []string, deps Dependencies, 
 	}
 	uploader := deps.Uploader
 	if uploader == nil {
-		uploader = NewR2MultipartUploader()
+		uploader = NewS3MultipartUploader()
 	}
 	reporter := stderr
 	if reporter == nil {
@@ -304,13 +305,13 @@ func Run(ctx context.Context, config Config, paths []string, deps Dependencies, 
 		Artifacts: facts,
 		Client: ClientInfo{
 			Capabilities: []string{
-				"r2_multipart_upload_v1",
-				"r2_multipart_completion_v1",
+				"s3_multipart_upload_v1",
+				"s3_multipart_completion_v1",
 				"publish_session_status_v1",
-				"server_created_r2_multipart_upload_v1",
+				"prepared_s3_multipart_upload_v1",
 			},
 			Name:    firstNonEmpty(deps.Command, "maze"),
-			Version: "",
+			Version: version.Version,
 		},
 		Hints:                publishHints(resolved),
 		PublicationRequestID: requestID,
@@ -325,9 +326,9 @@ func Run(ctx context.Context, config Config, paths []string, deps Dependencies, 
 	if len(session.Plan.Artifacts) != len(paths) {
 		return Result{}, ResolvedConfig{}, fmt.Errorf("PackageMaze publish plan returned %d artifacts for %d local paths", len(session.Plan.Artifacts), len(paths))
 	}
-	serverCreatedUploads := containsString(
+	usesPreparedUploads := containsString(
 		session.Plan.Capabilities,
-		"server_created_r2_multipart_upload_v1",
+		"prepared_s3_multipart_upload_v1",
 	)
 
 	for index, artifact := range session.Plan.Artifacts {
@@ -335,7 +336,7 @@ func Run(ctx context.Context, config Config, paths []string, deps Dependencies, 
 			return Result{}, ResolvedConfig{}, err
 		}
 		upload, err := uploader.Upload(ctx, artifact, paths[index], reporter, UploadOptions{
-			ServerCreated: serverCreatedUploads,
+			UsePreparedUpload: usesPreparedUploads,
 		})
 		if err != nil {
 			return Result{}, ResolvedConfig{}, fmt.Errorf("upload %s: %w", artifact.Artifact.Filename, err)
@@ -559,10 +560,10 @@ func validatePlan(response CreatePublishSessionResponse, config ResolvedConfig) 
 		}
 	}
 	for _, artifact := range response.Plan.Artifacts {
-		if artifact.Upload.Kind != "r2_multipart_upload_v1" {
+		if artifact.Upload.Kind != "s3_multipart_upload_v1" {
 			return fmt.Errorf("PackageMaze publish plan upload kind is unsupported")
 		}
-		if err := validateR2UploadPlan(artifact); err != nil {
+		if err := validateS3UploadPlan(artifact); err != nil {
 			return err
 		}
 		if artifact.Completion.Method != http.MethodPost {
@@ -576,12 +577,12 @@ func validatePlan(response CreatePublishSessionResponse, config ResolvedConfig) 
 }
 
 func validateCompletionPlanURL(config ResolvedConfig, response CreatePublishSessionResponse, artifact PlannedArtifact) error {
-	serverCreated := containsString(response.Plan.Capabilities, "server_created_r2_multipart_upload_v1")
-	if !serverCreated {
+	prepared := containsString(response.Plan.Capabilities, "prepared_s3_multipart_upload_v1")
+	if !prepared {
 		return validatePackageMazePlanURL("completion", config, artifact.Completion.URL, "upload-sessions", "/complete")
 	}
-	if strings.TrimSpace(artifact.PublicationAttemptID) == "" || strings.TrimSpace(artifact.Upload.R2UploadID) == "" {
-		return fmt.Errorf("PackageMaze server-created upload plan is incomplete")
+	if strings.TrimSpace(artifact.PublicationAttemptID) == "" || strings.TrimSpace(artifact.Upload.UploadID) == "" {
+		return fmt.Errorf("PackageMaze prepared upload plan is incomplete")
 	}
 	if err := validatePackageMazePlanURL("completion", config, artifact.Completion.URL, "publish-sessions", "/complete"); err != nil {
 		return err
@@ -589,7 +590,7 @@ func validateCompletionPlanURL(config ResolvedConfig, response CreatePublishSess
 	parsed, _ := url.Parse(artifact.Completion.URL)
 	expected := "/" + url.PathEscape(response.PublishSession.ID) + "/artifacts/" + url.PathEscape(artifact.PublicationAttemptID) + "/complete"
 	if !strings.HasSuffix(parsed.EscapedPath(), expected) {
-		return fmt.Errorf("PackageMaze publish plan completion URL does not match its Plan and Publication Attempt")
+		return fmt.Errorf("PackageMaze publish plan completion URL does not match the returned Plan")
 	}
 	return nil
 }
@@ -635,49 +636,49 @@ func validatePackageMazePlanURL(label string, config ResolvedConfig, value strin
 	return nil
 }
 
-func validateR2UploadPlan(artifact PlannedArtifact) error {
-	if err := validateR2Endpoint(artifact.Upload.Target.Endpoint); err != nil {
+func validateS3UploadPlan(artifact PlannedArtifact) error {
+	if err := validateS3Endpoint(artifact.Upload.Target.Endpoint); err != nil {
 		return err
 	}
 	if strings.TrimSpace(artifact.Upload.Target.Bucket) == "" {
-		return fmt.Errorf("PackageMaze publish plan R2 bucket is missing")
+		return fmt.Errorf("PackageMaze publish plan upload destination is incomplete")
 	}
 	if strings.TrimSpace(artifact.Upload.Target.ObjectKey) == "" {
-		return fmt.Errorf("PackageMaze publish plan R2 object key is missing")
+		return fmt.Errorf("PackageMaze publish plan upload destination is incomplete")
 	}
 	credentials := artifact.Upload.Target.Credentials
 	if strings.TrimSpace(credentials.AccessKeyID) == "" ||
 		strings.TrimSpace(credentials.SecretAccessKey) == "" ||
 		strings.TrimSpace(credentials.SessionToken) == "" {
-		return fmt.Errorf("PackageMaze publish plan R2 credentials are incomplete")
+		return fmt.Errorf("PackageMaze publish plan upload authorization is incomplete")
 	}
 	partSize := artifact.Upload.PartSizeBytes
-	if partSize < minR2PartSizeBytes || partSize > maxR2PartSizeBytes {
-		return fmt.Errorf("PackageMaze publish plan part size is outside the supported R2 multipart range")
+	if partSize < minMultipartPartSizeBytes || partSize > maxMultipartPartSizeBytes {
+		return fmt.Errorf("PackageMaze publish plan part size is unsupported")
 	}
 	if artifact.Artifact.SizeBytes < 0 {
 		return fmt.Errorf("PackageMaze publish plan artifact size is invalid")
 	}
 	if artifact.Artifact.SizeBytes > 0 {
 		partCount := (artifact.Artifact.SizeBytes + partSize - 1) / partSize
-		if partCount > maxR2MultipartParts {
-			return fmt.Errorf("PackageMaze publish plan would exceed the R2 multipart part limit")
+		if partCount > maxMultipartParts {
+			return fmt.Errorf("PackageMaze publish plan requires too many transfer parts")
 		}
 	}
 	return nil
 }
 
-func validateR2Endpoint(value string) error {
+func validateS3Endpoint(value string) error {
 	parsed, err := url.Parse(strings.TrimSpace(value))
 	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
-		return fmt.Errorf("PackageMaze publish plan R2 endpoint must be an HTTPS URL")
+		return fmt.Errorf("PackageMaze publish plan upload destination must be an HTTPS URL")
 	}
 	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || strings.Trim(parsed.Path, "/") != "" {
-		return fmt.Errorf("PackageMaze publish plan R2 endpoint must not include credentials, paths, queries, or fragments")
+		return fmt.Errorf("PackageMaze publish plan upload destination is invalid")
 	}
 	host := strings.ToLower(parsed.Hostname())
 	if !strings.HasSuffix(host, ".r2.cloudflarestorage.com") {
-		return fmt.Errorf("PackageMaze publish plan R2 endpoint must be a Cloudflare R2 S3 endpoint")
+		return fmt.Errorf("PackageMaze publish plan upload destination is unsupported")
 	}
 	return nil
 }
@@ -868,8 +869,8 @@ func (c *HTTPClient) CompleteUpload(ctx context.Context, token string, completio
 		return err
 	}
 	return c.doJSON(ctx, http.MethodPost, completion.URL, token, map[string]any{
-		"part_count":   upload.PartCount,
-		"r2_upload_id": upload.R2UploadID,
+		"part_count": upload.PartCount,
+		"upload_id":  upload.UploadID,
 	}, nil, http.StatusAccepted)
 }
 
@@ -933,6 +934,7 @@ func (c *HTTPClient) doJSON(ctx context.Context, method string, endpoint string,
 	}
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set(version.PackageMazeClientVersionHeader, version.PackageMazeClientVersion())
 	if body != nil {
 		request.Header.Set("Content-Type", "application/json")
 	}

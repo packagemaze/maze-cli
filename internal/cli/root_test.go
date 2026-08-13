@@ -170,7 +170,7 @@ func TestPublishCommandJSON(t *testing.T) {
 	client.createResponse = publishCreateResponse(artifactPath)
 	client.statusResponse = publishStatusResponse(client.createResponse)
 	uploader := &recordingUploader{
-		result: publishcmd.UploadResult{PartCount: 1, R2UploadID: "r2-upload-1"},
+		result: publishcmd.UploadResult{PartCount: 1, UploadID: "upload-1"},
 	}
 	stdout, stderr, err := runCommandWithPublishDeps(
 		auth.Dependencies{},
@@ -311,7 +311,7 @@ func publishCreateResponse(path string) publishcmd.CreatePublishSessionResponse 
 	artifact.Completion.URL = "https://pkg.packagemaze.com/your-org/npm/-/packagemaze/v1/upload-sessions/uploadsession_cli/complete"
 	artifact.Package.Name = "large-package"
 	artifact.Package.Version = "1.0.0"
-	artifact.Upload.Kind = "r2_multipart_upload_v1"
+	artifact.Upload.Kind = "s3_multipart_upload_v1"
 	artifact.Upload.PartSizeBytes = 5 * 1024 * 1024
 	artifact.Upload.Target.Bucket = "packagemaze-artifacts"
 	artifact.Upload.Target.Credentials.AccessKeyID = "r2-temp-access-key"

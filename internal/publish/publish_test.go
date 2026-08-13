@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/packagemaze/maze-cli/internal/version"
 )
 
 func TestRunExecutesBackendPlanAndWaits(t *testing.T) {
@@ -27,7 +29,7 @@ func TestRunExecutesBackendPlanAndWaits(t *testing.T) {
 		statusResponse("pubsession_123", "ready", client.createResponse.Plan.Artifacts),
 	}
 	uploader := &fakeUploader{
-		result: UploadResult{PartCount: 2, R2UploadID: "r2-upload-123"},
+		result: UploadResult{PartCount: 2, UploadID: "r2-upload-123"},
 	}
 	var stderr bytes.Buffer
 
@@ -76,11 +78,14 @@ func TestRunExecutesBackendPlanAndWaits(t *testing.T) {
 	if client.createRequest.Artifacts[0].SHA256 != sha256Hex("artifact bytes") {
 		t.Fatalf("sha256 = %q", client.createRequest.Artifacts[0].SHA256)
 	}
-	if !contains(client.createRequest.Client.Capabilities, "r2_multipart_upload_v1") {
+	if !contains(client.createRequest.Client.Capabilities, "s3_multipart_upload_v1") {
 		t.Fatalf("client capabilities = %#v", client.createRequest.Client.Capabilities)
 	}
-	if !contains(client.createRequest.Client.Capabilities, "server_created_r2_multipart_upload_v1") {
+	if !contains(client.createRequest.Client.Capabilities, "prepared_s3_multipart_upload_v1") {
 		t.Fatalf("client capabilities = %#v", client.createRequest.Client.Capabilities)
+	}
+	if client.createRequest.Client.Version != version.Version {
+		t.Fatalf("client version = %q", client.createRequest.Client.Version)
 	}
 	if client.createRequest.PublicationRequestID != "publication_request_test" {
 		t.Fatalf("publication request id = %q", client.createRequest.PublicationRequestID)
@@ -91,8 +96,8 @@ func TestRunExecutesBackendPlanAndWaits(t *testing.T) {
 	if len(client.completed) != 1 {
 		t.Fatalf("completed uploads = %#v", client.completed)
 	}
-	if client.completed[0].result.R2UploadID != "r2-upload-123" {
-		t.Fatalf("completion upload id = %q", client.completed[0].result.R2UploadID)
+	if client.completed[0].result.UploadID != "r2-upload-123" {
+		t.Fatalf("completion upload id = %q", client.completed[0].result.UploadID)
 	}
 	if client.statusCalls != 2 {
 		t.Fatalf("status calls = %d", client.statusCalls)
@@ -108,20 +113,20 @@ func TestRunExecutesBackendPlanAndWaits(t *testing.T) {
 	}
 }
 
-func TestRunUsesServerCreatedMultipartUploadAndReportsAdoption(t *testing.T) {
+func TestRunUsesPreparedUploadAndReportsAdoption(t *testing.T) {
 	path := writeTempArtifact(t, "large-package-1.0.0.tgz", "artifact bytes")
 	client := &fakeClient{}
 	client.createResponse = createResponseForFacts(t, "plan_123", []ArtifactFact{factForPath(t, path)})
 	client.createResponse.PublishSession.Resumed = true
-	client.createResponse.Plan.Capabilities = append(client.createResponse.Plan.Capabilities, "server_created_r2_multipart_upload_v1")
+	client.createResponse.Plan.Capabilities = append(client.createResponse.Plan.Capabilities, "prepared_s3_multipart_upload_v1")
 	artifact := &client.createResponse.Plan.Artifacts[0]
 	artifact.PublicationAttemptID = "attempt_123"
-	artifact.Upload.R2UploadID = "r2-upload-server-created"
+	artifact.Upload.UploadID = "r2-upload-prepared"
 	artifact.Completion.URL = "https://pkg.packagemaze.com/your-org/npm/-/packagemaze/v1/publish-sessions/plan_123/artifacts/attempt_123/complete"
 	client.statusResponses = []PublishSessionStatusResponse{
 		statusResponse("plan_123", "ready", client.createResponse.Plan.Artifacts),
 	}
-	uploader := &fakeUploader{result: UploadResult{PartCount: 1, R2UploadID: "r2-upload-server-created"}}
+	uploader := &fakeUploader{result: UploadResult{PartCount: 1, UploadID: "r2-upload-prepared"}}
 
 	result, _, err := Run(
 		context.Background(),
@@ -141,10 +146,10 @@ func TestRunUsesServerCreatedMultipartUploadAndReportsAdoption(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
-	if uploader.artifact.Upload.R2UploadID != "r2-upload-server-created" {
+	if uploader.artifact.Upload.UploadID != "r2-upload-prepared" {
 		t.Fatalf("uploader plan = %#v", uploader.artifact.Upload)
 	}
-	if !uploader.options.ServerCreated {
+	if !uploader.options.UsePreparedUpload {
 		t.Fatalf("uploader options = %#v", uploader.options)
 	}
 	if !result.Resumed {
@@ -152,11 +157,11 @@ func TestRunUsesServerCreatedMultipartUploadAndReportsAdoption(t *testing.T) {
 	}
 }
 
-func TestRunRejectsServerCreatedPlanWithoutUploadID(t *testing.T) {
+func TestRunRejectsPreparedPlanWithoutUploadID(t *testing.T) {
 	path := writeTempArtifact(t, "large-package-1.0.0.tgz", "artifact bytes")
 	client := &fakeClient{}
 	client.createResponse = createResponseForFacts(t, "plan_123", []ArtifactFact{factForPath(t, path)})
-	client.createResponse.Plan.Capabilities = append(client.createResponse.Plan.Capabilities, "server_created_r2_multipart_upload_v1")
+	client.createResponse.Plan.Capabilities = append(client.createResponse.Plan.Capabilities, "prepared_s3_multipart_upload_v1")
 	artifact := &client.createResponse.Plan.Artifacts[0]
 	artifact.PublicationAttemptID = "attempt_123"
 	artifact.Completion.URL = "https://pkg.packagemaze.com/your-org/npm/-/packagemaze/v1/publish-sessions/plan_123/artifacts/attempt_123/complete"
@@ -176,7 +181,7 @@ func TestRunRejectsServerCreatedPlanWithoutUploadID(t *testing.T) {
 		},
 		nil,
 	)
-	if err == nil || !strings.Contains(err.Error(), "server-created upload plan is incomplete") {
+	if err == nil || !strings.Contains(err.Error(), "prepared upload plan is incomplete") {
 		t.Fatalf("expected incomplete plan error, got %v", err)
 	}
 	if uploader.path != "" {
@@ -186,7 +191,9 @@ func TestRunRejectsServerCreatedPlanWithoutUploadID(t *testing.T) {
 
 func TestHTTPClientAcceptsAdoptedCreateResponse(t *testing.T) {
 	var bodies [][]byte
+	var clientVersion string
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		clientVersion = request.Header.Get(version.PackageMazeClientVersionHeader)
 		body, err := io.ReadAll(request.Body)
 		if err != nil {
 			t.Fatalf("read request: %v", err)
@@ -207,8 +214,54 @@ func TestHTTPClientAcceptsAdoptedCreateResponse(t *testing.T) {
 	if len(bodies) != 1 {
 		t.Fatalf("request bodies = %q", bodies)
 	}
+	if clientVersion != version.PackageMazeClientVersion() {
+		t.Fatalf("client version header = %q", clientVersion)
+	}
 	if !response.PublishSession.Resumed {
 		t.Fatalf("adopted response = %#v", response)
+	}
+}
+
+func TestHTTPClientSendsVersionHeaderOnEveryPackageMazeRequest(t *testing.T) {
+	var versions []string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		versions = append(versions, request.Header.Get(version.PackageMazeClientVersionHeader))
+		writer.Header().Set("Content-Type", "application/json")
+		switch {
+		case request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/publish-sessions"):
+			writer.WriteHeader(http.StatusCreated)
+			_, _ = io.WriteString(writer, `{"schema_version":1,"publish_session":{"id":"plan_123"},"plan":{"schema_version":1}}`)
+		case request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/complete"):
+			writer.WriteHeader(http.StatusAccepted)
+		case request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/plan_123"):
+			_, _ = io.WriteString(writer, `{"schema_version":1,"publish_session":{"id":"plan_123","state":"ready"}}`)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, true, server.Client())
+	if _, err := client.CreateSession(context.Background(), "your-org/npm", "secret", CreatePublishSessionRequest{}); err != nil {
+		t.Fatalf("CreateSession returned error: %v", err)
+	}
+	completionURL := server.URL + "/your-org/npm/-/packagemaze/v1/upload-sessions/upload_123/complete"
+	if err := client.CompleteUpload(context.Background(), "secret", CompletionInstruction{URL: completionURL}, UploadResult{PartCount: 1, UploadID: "upload_123"}); err != nil {
+		t.Fatalf("CompleteUpload returned error: %v", err)
+	}
+	statusURL := server.URL + "/your-org/npm/-/packagemaze/v1/publish-sessions/plan_123"
+	if _, err := client.GetStatus(context.Background(), "secret", statusURL); err != nil {
+		t.Fatalf("GetStatus returned error: %v", err)
+	}
+
+	expected := version.PackageMazeClientVersion()
+	if len(versions) != 3 {
+		t.Fatalf("version headers = %#v", versions)
+	}
+	for _, got := range versions {
+		if got != expected {
+			t.Fatalf("client version header = %q, want %q", got, expected)
+		}
 	}
 }
 
@@ -258,7 +311,7 @@ func TestRunReturnsBackendErrorStatusWithResult(t *testing.T) {
 			Client:   client,
 			Env:      mapLookup(map[string]string{DefaultTokenEnv: "pm_publish_token"}),
 			Sleep:    func(context.Context, time.Duration) error { return nil },
-			Uploader: &fakeUploader{result: UploadResult{PartCount: 1, R2UploadID: "r2-upload-123"}},
+			Uploader: &fakeUploader{result: UploadResult{PartCount: 1, UploadID: "r2-upload-123"}},
 		},
 		nil,
 	)
@@ -280,7 +333,7 @@ func TestRunRejectsPlanCompletionURLOutsidePackageMazeOrigin(t *testing.T) {
 		factForPath(t, path),
 	})
 	client.createResponse.Plan.Artifacts[0].Completion.URL = "https://attacker.example/upload-sessions/uploadsession_123/complete"
-	uploader := &fakeUploader{result: UploadResult{PartCount: 1, R2UploadID: "r2-upload-123"}}
+	uploader := &fakeUploader{result: UploadResult{PartCount: 1, UploadID: "r2-upload-123"}}
 
 	_, _, err := Run(
 		context.Background(),
@@ -320,7 +373,7 @@ func TestRunRejectsPlanStatusURLOutsidePackageMazeControlRoute(t *testing.T) {
 		Dependencies{
 			Client:   client,
 			Env:      mapLookup(map[string]string{DefaultTokenEnv: "pm_publish_token"}),
-			Uploader: &fakeUploader{result: UploadResult{PartCount: 1, R2UploadID: "r2-upload-123"}},
+			Uploader: &fakeUploader{result: UploadResult{PartCount: 1, UploadID: "r2-upload-123"}},
 		},
 		nil,
 	)
@@ -330,7 +383,7 @@ func TestRunRejectsPlanStatusURLOutsidePackageMazeControlRoute(t *testing.T) {
 	}
 }
 
-func TestRunRejectsUnsafeR2UploadPlan(t *testing.T) {
+func TestRunRejectsUnsupportedUploadDestinationWithoutLeakingProvider(t *testing.T) {
 	path := writeTempArtifact(t, "large-package-1.0.0.tgz", "artifact bytes")
 	client := &fakeClient{}
 	client.createResponse = createResponseForFacts(t, "pubsession_123", []ArtifactFact{
@@ -345,23 +398,28 @@ func TestRunRejectsUnsafeR2UploadPlan(t *testing.T) {
 		Dependencies{
 			Client:   client,
 			Env:      mapLookup(map[string]string{DefaultTokenEnv: "pm_publish_token"}),
-			Uploader: &fakeUploader{result: UploadResult{PartCount: 1, R2UploadID: "r2-upload-123"}},
+			Uploader: &fakeUploader{result: UploadResult{PartCount: 1, UploadID: "r2-upload-123"}},
 		},
 		nil,
 	)
 
-	if err == nil || !strings.Contains(err.Error(), "Cloudflare R2 S3 endpoint") {
-		t.Fatalf("expected R2 endpoint rejection, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "upload destination is unsupported") {
+		t.Fatalf("expected upload destination rejection, got %v", err)
+	}
+	for _, privateTerm := range []string{"R2", "Cloudflare", "bucket", "object key"} {
+		if strings.Contains(err.Error(), privateTerm) {
+			t.Fatalf("provider detail %q leaked in error: %v", privateTerm, err)
+		}
 	}
 }
 
-func TestRunRejectsOversizedR2PartSize(t *testing.T) {
+func TestRunRejectsUnsupportedPartSize(t *testing.T) {
 	path := writeTempArtifact(t, "large-package-1.0.0.tgz", "artifact bytes")
 	client := &fakeClient{}
 	client.createResponse = createResponseForFacts(t, "pubsession_123", []ArtifactFact{
 		factForPath(t, path),
 	})
-	client.createResponse.Plan.Artifacts[0].Upload.PartSizeBytes = maxR2PartSizeBytes + 1
+	client.createResponse.Plan.Artifacts[0].Upload.PartSizeBytes = maxMultipartPartSizeBytes + 1
 
 	_, _, err := Run(
 		context.Background(),
@@ -370,13 +428,13 @@ func TestRunRejectsOversizedR2PartSize(t *testing.T) {
 		Dependencies{
 			Client:   client,
 			Env:      mapLookup(map[string]string{DefaultTokenEnv: "pm_publish_token"}),
-			Uploader: &fakeUploader{result: UploadResult{PartCount: 1, R2UploadID: "r2-upload-123"}},
+			Uploader: &fakeUploader{result: UploadResult{PartCount: 1, UploadID: "r2-upload-123"}},
 		},
 		nil,
 	)
 
 	if err == nil || !strings.Contains(err.Error(), "part size") {
-		t.Fatalf("expected R2 part size rejection, got %v", err)
+		t.Fatalf("expected part size rejection, got %v", err)
 	}
 }
 
@@ -410,6 +468,19 @@ func TestWriteJSONOmitsSecrets(t *testing.T) {
 	if strings.Contains(stdout.String(), "secret") || strings.Contains(stdout.String(), "access_key") {
 		t.Fatalf("secret material leaked: %s", stdout.String())
 	}
+	for _, privateTerm := range []string{
+		"r2",
+		"cloudflare",
+		"bucket",
+		"object_key",
+		"upload_id",
+		"publication_attempt_id",
+		"multipart",
+	} {
+		if strings.Contains(strings.ToLower(stdout.String()), privateTerm) {
+			t.Fatalf("private implementation term %q leaked: %s", privateTerm, stdout.String())
+		}
+	}
 	var text bytes.Buffer
 	if err := Write(result, FormatText, &text); err != nil {
 		t.Fatalf("Write text returned error: %v", err)
@@ -439,7 +510,7 @@ func createResponseForFacts(t *testing.T, sessionID string, facts []ArtifactFact
 		artifact.Completion.URL = "https://pkg.packagemaze.com/your-org/npm/-/packagemaze/v1/upload-sessions/uploadsession_123/complete"
 		artifact.Package.Name = firstNonEmpty("@your-org/large-package", "large-package")
 		artifact.Package.Version = "1.0.0"
-		artifact.Upload.Kind = "r2_multipart_upload_v1"
+		artifact.Upload.Kind = "s3_multipart_upload_v1"
 		artifact.Upload.PartSizeBytes = 5 * 1024 * 1024
 		artifact.Upload.Target.Bucket = "packagemaze-artifacts"
 		artifact.Upload.Target.Endpoint = "https://example.r2.cloudflarestorage.com"

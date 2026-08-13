@@ -12,6 +12,8 @@ import (
 	"path"
 	"strings"
 	"time"
+
+	"github.com/packagemaze/maze-cli/internal/version"
 )
 
 type Client struct {
@@ -125,6 +127,7 @@ func (c *Client) ExchangeCI(ctx context.Context, request CITokenRequest) (CIToke
 	}
 	httpRequest.Header.Set("Accept", "application/json")
 	httpRequest.Header.Set("Content-Type", "application/json")
+	httpRequest.Header.Set(version.PackageMazeClientVersionHeader, version.PackageMazeClientVersion())
 
 	response, err := c.httpClient.Do(httpRequest)
 	if err != nil {

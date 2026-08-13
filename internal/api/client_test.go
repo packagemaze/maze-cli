@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/packagemaze/maze-cli/internal/version"
 )
 
 type ciTokenContractFixture struct {
@@ -59,6 +61,9 @@ func TestClientExchangeCISendsRequestAndParsesResponse(t *testing.T) {
 		}
 		if request.Header.Get("Content-Type") != "application/json" {
 			t.Fatalf("Content-Type = %q", request.Header.Get("Content-Type"))
+		}
+		if request.Header.Get(version.PackageMazeClientVersionHeader) != version.PackageMazeClientVersion() {
+			t.Fatalf("client version header = %q", request.Header.Get(version.PackageMazeClientVersionHeader))
 		}
 		if err := json.NewDecoder(request.Body).Decode(&gotRequest); err != nil {
 			t.Fatalf("decode request: %v", err)

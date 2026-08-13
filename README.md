@@ -144,15 +144,21 @@ maze publish ./package-1.0.0.tgz --feed <organization>/<feed> --json
 
 `maze publish` is a generic executor for PackageMaze Publish Sessions. It
 computes filename, byte size, SHA-256, and content type for each path, asks the
-Feed for a versioned publish plan, uploads through the instructed direct R2
-multipart target, reports completion, and waits for the backend status contract.
+Feed for a versioned Publish Plan, transfers each Artifact as instructed,
+reports completion, and waits for PackageMaze status.
 PackageMaze owns npm and PyPI package/version decisions.
 
-Each invocation sends one opaque publication request identity. When PackageMaze
-returns a server-created multipart upload, `maze` uses that exact upload instead
-of creating another one, and accepts a resumed server response. Automatic Create
-retry, cross-invocation resume, persisted part progress, credential renewal, and
-parallel uploads remain future work; the CLI never persists upload credentials.
+Each invocation sends one opaque publication request identity. PackageMaze may
+return a new or resumed Plan; `maze` follows that Plan without exposing its
+storage implementation. Automatic Create retry, cross-invocation resume,
+persisted transfer progress, credential renewal, and parallel uploads remain
+future work. The CLI neither prints nor persists temporary transfer
+authorization.
+
+Every request from `maze` to PackageMaze carries
+`X-PackageMaze-Client-Version: maze/<version>`. PackageMaze can use that explicit
+version for diagnostics and support policy without inferring it from output or
+transfer details.
 
 Authentication uses a PackageMaze Token with publish scope:
 
