@@ -113,6 +113,67 @@ func TestRunExecutesBackendPlanAndWaits(t *testing.T) {
 	}
 }
 
+func TestRunPublishesMultipleArtifactsInDeclaredOrder(t *testing.T) {
+	wheel := writeTempArtifact(t, "example-1.0.0-py3-none-any.whl", "wheel bytes")
+	sdist := writeTempArtifact(t, "example-1.0.0.tar.gz", "sdist bytes")
+	client := &fakeClient{}
+	client.createResponse = createResponseForFacts(t, "plan_multiple", []ArtifactFact{
+		factForPath(t, wheel),
+		factForPath(t, sdist),
+	})
+	client.createResponse.Plan.Wait.URL = strings.Replace(
+		client.createResponse.Plan.Wait.URL,
+		"/your-org/npm/",
+		"/your-org/pypi/",
+		1,
+	)
+	for index := range client.createResponse.Plan.Artifacts {
+		client.createResponse.Plan.Artifacts[index].Completion.URL = strings.Replace(
+			client.createResponse.Plan.Artifacts[index].Completion.URL,
+			"/your-org/npm/",
+			"/your-org/pypi/",
+			1,
+		)
+	}
+	client.statusResponses = []PublishSessionStatusResponse{
+		statusResponse("plan_multiple", "ready", client.createResponse.Plan.Artifacts),
+	}
+	uploader := &orderedUploader{}
+
+	result, _, err := Run(
+		context.Background(),
+		Config{Feed: "your-org/pypi", TokenEnv: DefaultTokenEnv, Wait: true},
+		[]string{wheel, sdist},
+		Dependencies{
+			Client: client,
+			Env:    mapLookup(map[string]string{DefaultTokenEnv: "pm_publish_token"}),
+			PublicationRequestID: func() (string, error) {
+				return "publication_request_multiple", nil
+			},
+			Sleep:    func(context.Context, time.Duration) error { return nil },
+			Uploader: uploader,
+		},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if got := strings.Join(uploader.paths, ","); got != wheel+","+sdist {
+		t.Fatalf("upload order = %q", got)
+	}
+	if len(client.completed) != 2 {
+		t.Fatalf("completion calls = %#v", client.completed)
+	}
+	for index, completion := range client.completed {
+		if completion.result.UploadID != client.createResponse.Plan.Artifacts[index].Upload.UploadID {
+			t.Fatalf("completion %d upload id = %q", index, completion.result.UploadID)
+		}
+	}
+	if len(result.Artifacts) != 2 || result.Artifacts[0].Filename != filepath.Base(wheel) || result.Artifacts[1].Filename != filepath.Base(sdist) {
+		t.Fatalf("result artifacts = %#v", result.Artifacts)
+	}
+}
+
 func TestRunUsesPreparedUploadAndReportsAdoption(t *testing.T) {
 	path := writeTempArtifact(t, "large-package-1.0.0.tgz", "artifact bytes")
 	client := &fakeClient{}
@@ -537,12 +598,16 @@ func createResponseForFacts(t *testing.T, sessionID string, facts []ArtifactFact
 	response.Plan.Wait.IntervalSeconds = 1
 	response.Plan.Wait.TimeoutSeconds = 30
 	for index, fact := range facts {
+		suffix := ""
+		if index > 0 {
+			suffix = "-" + string(rune('a'+index))
+		}
 		var artifact PlannedArtifact
 		artifact.Artifact = fact
-		artifact.ArtifactID = "artifact_123"
+		artifact.ArtifactID = "artifact_123" + suffix
 		artifact.Completion.Method = "POST"
-		artifact.PublicationAttemptID = "attempt_123"
-		artifact.Completion.URL = "https://pkg.packagemaze.com/your-org/npm/-/packagemaze/v1/publish-sessions/" + sessionID + "/artifacts/attempt_123/complete"
+		artifact.PublicationAttemptID = "attempt_123" + suffix
+		artifact.Completion.URL = "https://pkg.packagemaze.com/your-org/npm/-/packagemaze/v1/publish-sessions/" + sessionID + "/artifacts/" + artifact.PublicationAttemptID + "/complete"
 		artifact.Package.Name = firstNonEmpty("@your-org/large-package", "large-package")
 		artifact.Package.Version = "1.0.0"
 		artifact.Upload.Kind = "s3_multipart_upload_v1"
@@ -554,11 +619,8 @@ func createResponseForFacts(t *testing.T, sessionID string, facts []ArtifactFact
 		artifact.Upload.Target.Credentials.SessionToken = "r2-temp-session-token"
 		artifact.Upload.Target.ObjectKey = "uploads/object"
 		artifact.Upload.Target.Region = "auto"
-		artifact.Upload.UploadSessionID = "uploadsession_123"
-		artifact.Upload.UploadID = "prepared-upload-123"
-		if index > 0 {
-			artifact.ArtifactID = artifact.ArtifactID + string(rune('a'+index))
-		}
+		artifact.Upload.UploadSessionID = "uploadsession_123" + suffix
+		artifact.Upload.UploadID = "prepared-upload-123" + suffix
 		response.Plan.Artifacts = append(response.Plan.Artifacts, artifact)
 	}
 	return response
@@ -667,6 +729,15 @@ type fakeUploader struct {
 	artifact PlannedArtifact
 	path     string
 	result   UploadResult
+}
+
+type orderedUploader struct {
+	paths []string
+}
+
+func (u *orderedUploader) Upload(_ context.Context, artifact PlannedArtifact, path string, _ io.Writer) (UploadResult, error) {
+	u.paths = append(u.paths, path)
+	return UploadResult{PartCount: 1, UploadID: artifact.Upload.UploadID}, nil
 }
 
 func (f *fakeUploader) Upload(_ context.Context, artifact PlannedArtifact, path string, _ io.Writer) (UploadResult, error) {
