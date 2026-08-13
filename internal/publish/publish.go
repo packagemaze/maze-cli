@@ -68,11 +68,7 @@ type Client interface {
 }
 
 type Uploader interface {
-	Upload(context.Context, PlannedArtifact, string, io.Writer, UploadOptions) (UploadResult, error)
-}
-
-type UploadOptions struct {
-	UsePreparedUpload bool
+	Upload(context.Context, PlannedArtifact, string, io.Writer) (UploadResult, error)
 }
 
 type UploadResult struct {
@@ -326,18 +322,11 @@ func Run(ctx context.Context, config Config, paths []string, deps Dependencies, 
 	if len(session.Plan.Artifacts) != len(paths) {
 		return Result{}, ResolvedConfig{}, fmt.Errorf("PackageMaze publish plan returned %d artifacts for %d local paths", len(session.Plan.Artifacts), len(paths))
 	}
-	usesPreparedUploads := containsString(
-		session.Plan.Capabilities,
-		"prepared_s3_multipart_upload_v1",
-	)
-
 	for index, artifact := range session.Plan.Artifacts {
 		if _, err := fmt.Fprintf(reporter, "Uploading %s\n", artifact.Artifact.Filename); err != nil {
 			return Result{}, ResolvedConfig{}, err
 		}
-		upload, err := uploader.Upload(ctx, artifact, paths[index], reporter, UploadOptions{
-			UsePreparedUpload: usesPreparedUploads,
-		})
+		upload, err := uploader.Upload(ctx, artifact, paths[index], reporter)
 		if err != nil {
 			return Result{}, ResolvedConfig{}, fmt.Errorf("upload %s: %w", artifact.Artifact.Filename, err)
 		}
@@ -554,6 +543,9 @@ func validatePlan(response CreatePublishSessionResponse, config ResolvedConfig) 
 	if response.Plan.Kind != "package_publish_plan" {
 		return fmt.Errorf("PackageMaze publish plan kind is unsupported")
 	}
+	if !containsString(response.Plan.Capabilities, "prepared_s3_multipart_upload_v1") {
+		return fmt.Errorf("PackageMaze publish plan does not support prepared Artifact transfer")
+	}
 	if strings.TrimSpace(response.Plan.Wait.URL) != "" {
 		if err := validatePackageMazePlanURL("status", config, response.Plan.Wait.URL, "publish-sessions", ""); err != nil {
 			return err
@@ -577,10 +569,6 @@ func validatePlan(response CreatePublishSessionResponse, config ResolvedConfig) 
 }
 
 func validateCompletionPlanURL(config ResolvedConfig, response CreatePublishSessionResponse, artifact PlannedArtifact) error {
-	prepared := containsString(response.Plan.Capabilities, "prepared_s3_multipart_upload_v1")
-	if !prepared {
-		return validatePackageMazePlanURL("completion", config, artifact.Completion.URL, "upload-sessions", "/complete")
-	}
 	if strings.TrimSpace(artifact.PublicationAttemptID) == "" || strings.TrimSpace(artifact.Upload.UploadID) == "" {
 		return fmt.Errorf("PackageMaze prepared upload plan is incomplete")
 	}

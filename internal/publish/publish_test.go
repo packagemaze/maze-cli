@@ -149,9 +149,6 @@ func TestRunUsesPreparedUploadAndReportsAdoption(t *testing.T) {
 	if uploader.artifact.Upload.UploadID != "r2-upload-prepared" {
 		t.Fatalf("uploader plan = %#v", uploader.artifact.Upload)
 	}
-	if !uploader.options.UsePreparedUpload {
-		t.Fatalf("uploader options = %#v", uploader.options)
-	}
 	if !result.Resumed {
 		t.Fatalf("result did not report adoption: %#v", result)
 	}
@@ -164,6 +161,7 @@ func TestRunRejectsPreparedPlanWithoutUploadID(t *testing.T) {
 	client.createResponse.Plan.Capabilities = append(client.createResponse.Plan.Capabilities, "prepared_s3_multipart_upload_v1")
 	artifact := &client.createResponse.Plan.Artifacts[0]
 	artifact.PublicationAttemptID = "attempt_123"
+	artifact.Upload.UploadID = ""
 	artifact.Completion.URL = "https://pkg.packagemaze.com/your-org/npm/-/packagemaze/v1/publish-sessions/plan_123/artifacts/attempt_123/complete"
 	uploader := &fakeUploader{}
 
@@ -186,6 +184,36 @@ func TestRunRejectsPreparedPlanWithoutUploadID(t *testing.T) {
 	}
 	if uploader.path != "" {
 		t.Fatalf("uploader ran for invalid plan: %q", uploader.path)
+	}
+}
+
+func TestRunRejectsLegacyPlanBeforeArtifactTransfer(t *testing.T) {
+	path := writeTempArtifact(t, "large-package-1.0.0.tgz", "artifact bytes")
+	client := &fakeClient{}
+	client.createResponse = createResponseForFacts(t, "pubsession_123", []ArtifactFact{factForPath(t, path)})
+	client.createResponse.Plan.Capabilities = []string{
+		"s3_multipart_upload_v1",
+		"s3_multipart_completion_v1",
+		"publish_session_status_v1",
+	}
+	uploader := &fakeUploader{}
+
+	_, _, err := Run(
+		context.Background(),
+		Config{Feed: "your-org/npm", TokenEnv: DefaultTokenEnv, Wait: true},
+		[]string{path},
+		Dependencies{
+			Client:   client,
+			Env:      mapLookup(map[string]string{DefaultTokenEnv: "pm_publish_token"}),
+			Uploader: uploader,
+		},
+		nil,
+	)
+	if err == nil || !strings.Contains(err.Error(), "does not support prepared Artifact transfer") {
+		t.Fatalf("expected unsupported plan error, got %v", err)
+	}
+	if uploader.path != "" {
+		t.Fatalf("uploader ran for unsupported plan: %q", uploader.path)
 	}
 }
 
@@ -245,7 +273,7 @@ func TestHTTPClientSendsVersionHeaderOnEveryPackageMazeRequest(t *testing.T) {
 	if _, err := client.CreateSession(context.Background(), "your-org/npm", "secret", CreatePublishSessionRequest{}); err != nil {
 		t.Fatalf("CreateSession returned error: %v", err)
 	}
-	completionURL := server.URL + "/your-org/npm/-/packagemaze/v1/upload-sessions/upload_123/complete"
+	completionURL := server.URL + "/your-org/npm/-/packagemaze/v1/publish-sessions/plan_123/artifacts/attempt_123/complete"
 	if err := client.CompleteUpload(context.Background(), "secret", CompletionInstruction{URL: completionURL}, UploadResult{PartCount: 1, UploadID: "upload_123"}); err != nil {
 		t.Fatalf("CompleteUpload returned error: %v", err)
 	}
@@ -499,6 +527,12 @@ func createResponseForFacts(t *testing.T, sessionID string, facts []ArtifactFact
 	response.PublishSession.ArtifactProtocol = "npm"
 	response.Plan.Kind = "package_publish_plan"
 	response.Plan.SchemaVersion = 1
+	response.Plan.Capabilities = []string{
+		"s3_multipart_upload_v1",
+		"s3_multipart_completion_v1",
+		"publish_session_status_v1",
+		"prepared_s3_multipart_upload_v1",
+	}
 	response.Plan.Wait.URL = "https://pkg.packagemaze.com/your-org/npm/-/packagemaze/v1/publish-sessions/" + sessionID
 	response.Plan.Wait.IntervalSeconds = 1
 	response.Plan.Wait.TimeoutSeconds = 30
@@ -507,7 +541,8 @@ func createResponseForFacts(t *testing.T, sessionID string, facts []ArtifactFact
 		artifact.Artifact = fact
 		artifact.ArtifactID = "artifact_123"
 		artifact.Completion.Method = "POST"
-		artifact.Completion.URL = "https://pkg.packagemaze.com/your-org/npm/-/packagemaze/v1/upload-sessions/uploadsession_123/complete"
+		artifact.PublicationAttemptID = "attempt_123"
+		artifact.Completion.URL = "https://pkg.packagemaze.com/your-org/npm/-/packagemaze/v1/publish-sessions/" + sessionID + "/artifacts/attempt_123/complete"
 		artifact.Package.Name = firstNonEmpty("@your-org/large-package", "large-package")
 		artifact.Package.Version = "1.0.0"
 		artifact.Upload.Kind = "s3_multipart_upload_v1"
@@ -520,6 +555,7 @@ func createResponseForFacts(t *testing.T, sessionID string, facts []ArtifactFact
 		artifact.Upload.Target.ObjectKey = "uploads/object"
 		artifact.Upload.Target.Region = "auto"
 		artifact.Upload.UploadSessionID = "uploadsession_123"
+		artifact.Upload.UploadID = "prepared-upload-123"
 		if index > 0 {
 			artifact.ArtifactID = artifact.ArtifactID + string(rune('a'+index))
 		}
@@ -629,14 +665,12 @@ func (f *fakeClient) GetStatus(context.Context, string, string) (PublishSessionS
 
 type fakeUploader struct {
 	artifact PlannedArtifact
-	options  UploadOptions
 	path     string
 	result   UploadResult
 }
 
-func (f *fakeUploader) Upload(_ context.Context, artifact PlannedArtifact, path string, _ io.Writer, options UploadOptions) (UploadResult, error) {
+func (f *fakeUploader) Upload(_ context.Context, artifact PlannedArtifact, path string, _ io.Writer) (UploadResult, error) {
 	f.artifact = artifact
-	f.options = options
 	f.path = path
 	return f.result, nil
 }

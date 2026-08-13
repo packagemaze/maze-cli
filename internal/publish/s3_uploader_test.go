@@ -17,7 +17,7 @@ func TestS3MultipartUploaderUsesPreparedUploadWithoutCreateOrAbort(t *testing.T)
 	recorder := &s3RequestRecorder{}
 	uploader := &S3MultipartUploader{HTTPClient: recorder}
 
-	result, err := uploader.Upload(context.Background(), artifact, path, io.Discard, UploadOptions{UsePreparedUpload: true})
+	result, err := uploader.Upload(context.Background(), artifact, path, io.Discard)
 	if err != nil {
 		t.Fatalf("Upload returned error: %v", err)
 	}
@@ -29,22 +29,19 @@ func TestS3MultipartUploaderUsesPreparedUploadWithoutCreateOrAbort(t *testing.T)
 	}
 }
 
-func TestS3MultipartUploaderStartsUnpreparedUpload(t *testing.T) {
+func TestS3MultipartUploaderRejectsPlanWithoutPreparedUpload(t *testing.T) {
 	path := writeTempArtifact(t, "package-1.0.0.tgz", "artifact bytes")
 	artifact := s3UploadArtifact(t, path)
-	artifact.Upload.UploadID = "ignored-without-capability"
+	artifact.Upload.UploadID = ""
 	recorder := &s3RequestRecorder{}
 	uploader := &S3MultipartUploader{HTTPClient: recorder}
 
-	result, err := uploader.Upload(context.Background(), artifact, path, io.Discard, UploadOptions{})
-	if err != nil {
-		t.Fatalf("Upload returned error: %v", err)
+	_, err := uploader.Upload(context.Background(), artifact, path, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "transfer plan was incomplete") {
+		t.Fatalf("expected incomplete plan error, got %v", err)
 	}
-	if result.UploadID != "client-upload-123" || result.PartCount != 1 {
-		t.Fatalf("result = %#v", result)
-	}
-	if got := strings.Join(recorder.operations, ","); got != "create,upload-part,complete" {
-		t.Fatalf("operations = %s", got)
+	if len(recorder.operations) != 0 {
+		t.Fatalf("operations = %#v", recorder.operations)
 	}
 }
 
@@ -82,17 +79,12 @@ func (r *s3RequestRecorder) Do(request *http.Request) (*http.Response, error) {
 	body := ""
 	headers := make(http.Header)
 	switch {
-	case request.Method == http.MethodPost && request.URL.Query().Has("uploads"):
-		operation = "create"
-		body = `<CreateMultipartUploadResult><UploadId>client-upload-123</UploadId></CreateMultipartUploadResult>`
 	case request.Method == http.MethodPut && request.URL.Query().Has("partNumber"):
 		operation = "upload-part"
 		headers.Set("ETag", `"part-etag"`)
 	case request.Method == http.MethodPost && request.URL.Query().Has("uploadId"):
 		operation = "complete"
 		body = `<CompleteMultipartUploadResult><ETag>"complete-etag"</ETag></CompleteMultipartUploadResult>`
-	case request.Method == http.MethodDelete:
-		operation = "abort"
 	default:
 		return nil, fmt.Errorf("unexpected S3 request: %s %s", request.Method, request.URL.String())
 	}

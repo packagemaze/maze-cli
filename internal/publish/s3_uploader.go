@@ -21,7 +21,7 @@ func NewS3MultipartUploader() *S3MultipartUploader {
 	return &S3MultipartUploader{}
 }
 
-func (u *S3MultipartUploader) Upload(ctx context.Context, artifact PlannedArtifact, path string, progress io.Writer, options UploadOptions) (UploadResult, error) {
+func (u *S3MultipartUploader) Upload(ctx context.Context, artifact PlannedArtifact, path string, progress io.Writer) (UploadResult, error) {
 	if err := validateS3UploadPlan(artifact); err != nil {
 		return UploadResult{}, err
 	}
@@ -36,35 +36,13 @@ func (u *S3MultipartUploader) Upload(ctx context.Context, artifact PlannedArtifa
 		Region:       firstNonEmpty(artifact.Upload.Target.Region, "auto"),
 		UsePathStyle: true,
 	})
-	uploadID := ""
-	prepared := options.UsePreparedUpload
-	if prepared {
-		uploadID = artifact.Upload.UploadID
-	}
-	if !prepared {
-		create, err := client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
-			Bucket:      aws.String(artifact.Upload.Target.Bucket),
-			ContentType: aws.String(artifact.Artifact.ContentType),
-			Key:         aws.String(artifact.Upload.Target.ObjectKey),
-		})
-		if err != nil {
-			return UploadResult{}, fmt.Errorf("start Artifact transfer: %w", err)
-		}
-		uploadID = aws.ToString(create.UploadId)
-		if uploadID == "" {
-			return UploadResult{}, fmt.Errorf("start Artifact transfer: upload plan was incomplete")
-		}
+	uploadID := artifact.Upload.UploadID
+	if uploadID == "" {
+		return UploadResult{}, fmt.Errorf("Artifact transfer plan was incomplete")
 	}
 
 	parts, uploadErr := uploadParts(ctx, client, artifact, path, uploadID, progress)
 	if uploadErr != nil {
-		if !prepared {
-			_, _ = client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
-				Bucket:   aws.String(artifact.Upload.Target.Bucket),
-				Key:      aws.String(artifact.Upload.Target.ObjectKey),
-				UploadId: aws.String(uploadID),
-			})
-		}
 		return UploadResult{}, uploadErr
 	}
 	_, err := client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
@@ -75,13 +53,6 @@ func (u *S3MultipartUploader) Upload(ctx context.Context, artifact PlannedArtifa
 			Parts: parts,
 		},
 	})
-	if err != nil && !prepared {
-		_, _ = client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
-			Bucket:   aws.String(artifact.Upload.Target.Bucket),
-			Key:      aws.String(artifact.Upload.Target.ObjectKey),
-			UploadId: aws.String(uploadID),
-		})
-	}
 	if err != nil {
 		return UploadResult{}, fmt.Errorf("finish Artifact transfer: %w", err)
 	}
