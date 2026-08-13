@@ -354,21 +354,81 @@ func TestHTTPClientSendsVersionHeaderOnEveryPackageMazeRequest(t *testing.T) {
 	}
 }
 
-func TestHTTPClientDoesNotRetryCreateBeforeServerFlowIsKnown(t *testing.T) {
+func TestHTTPClientRetriesAmbiguousCreateOnceWithExactRequest(t *testing.T) {
+	for _, firstResponse := range []struct {
+		name  string
+		write func(http.ResponseWriter)
+	}{
+		{
+			name: "temporary service failure",
+			write: func(writer http.ResponseWriter) {
+				http.Error(writer, "temporary", http.StatusServiceUnavailable)
+			},
+		},
+		{
+			name: "truncated success response",
+			write: func(writer http.ResponseWriter) {
+				writer.Header().Set("Content-Type", "application/json")
+				writer.WriteHeader(http.StatusCreated)
+				_, _ = io.WriteString(writer, `{"schema_version":`)
+			},
+		},
+	} {
+		t.Run(firstResponse.name, func(t *testing.T) {
+			var bodies [][]byte
+			var versions []string
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				body, err := io.ReadAll(request.Body)
+				if err != nil {
+					t.Fatalf("read request: %v", err)
+				}
+				bodies = append(bodies, body)
+				versions = append(versions, request.Header.Get(version.PackageMazeClientVersionHeader))
+				if len(bodies) == 1 {
+					firstResponse.write(writer)
+					return
+				}
+				writer.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(writer, `{"schema_version":1,"publish_session":{"id":"plan_123","resumed":true},"plan":{"schema_version":1}}`)
+			}))
+			defer server.Close()
+			client := NewClient(server.URL, true, server.Client())
+			request := CreatePublishSessionRequest{
+				Artifacts:            []ArtifactFact{{Filename: "package.tgz", SHA256: strings.Repeat("a", 64), SizeBytes: 7}},
+				PublicationRequestID: "publication_request_retry",
+			}
+
+			response, err := client.CreateSession(context.Background(), "your-org/npm", "secret", request)
+			if err != nil {
+				t.Fatalf("CreateSession returned error: %v", err)
+			}
+			if !response.PublishSession.Resumed {
+				t.Fatalf("adopted response = %#v", response)
+			}
+			if len(bodies) != 2 || !bytes.Equal(bodies[0], bodies[1]) {
+				t.Fatalf("create request bodies = %q", bodies)
+			}
+			for _, got := range versions {
+				if got != version.PackageMazeClientVersion() {
+					t.Fatalf("client version header = %q", got)
+				}
+			}
+		})
+	}
+}
+
+func TestHTTPClientDoesNotRetryRejectedCreate(t *testing.T) {
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		requests++
-		http.Error(writer, "temporary", http.StatusServiceUnavailable)
+		http.Error(writer, "conflict", http.StatusConflict)
 	}))
 	defer server.Close()
 	client := NewClient(server.URL, true, server.Client())
 
-	_, err := client.CreateSession(
-		context.Background(),
-		"your-org/npm",
-		"secret",
-		CreatePublishSessionRequest{PublicationRequestID: "publication_request_retry"},
-	)
+	_, err := client.CreateSession(context.Background(), "your-org/npm", "secret", CreatePublishSessionRequest{
+		PublicationRequestID: "publication_request_conflict",
+	})
 	if err == nil {
 		t.Fatal("CreateSession unexpectedly succeeded")
 	}

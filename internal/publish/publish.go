@@ -842,11 +842,39 @@ func (c *HTTPClient) CreateSession(ctx context.Context, feed string, token strin
 	if err != nil {
 		return CreatePublishSessionResponse{}, err
 	}
-	var response CreatePublishSessionResponse
-	if err := c.doJSON(ctx, http.MethodPost, endpoint, token, request, &response, http.StatusOK, http.StatusCreated); err != nil {
-		return CreatePublishSessionResponse{}, err
+	content, err := json.Marshal(request)
+	if err != nil {
+		return CreatePublishSessionResponse{}, fmt.Errorf("encode PackageMaze publish request: %w", err)
 	}
-	return response, nil
+	for attempt := 0; attempt < 2; attempt++ {
+		var response CreatePublishSessionResponse
+		err := c.doJSONBytes(ctx, http.MethodPost, endpoint, token, content, &response, http.StatusOK, http.StatusCreated)
+		if err == nil {
+			return response, nil
+		}
+		if attempt == 1 || !retryableCreateSessionError(ctx, err) {
+			return CreatePublishSessionResponse{}, err
+		}
+	}
+	return CreatePublishSessionResponse{}, fmt.Errorf("PackageMaze publish request failed")
+}
+
+func retryableCreateSessionError(ctx context.Context, err error) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	var malformed *MalformedResponseError
+	if errors.As(err, &malformed) {
+		return true
+	}
+	var status *StatusError
+	if errors.As(err, &status) {
+		return status.StatusCode == http.StatusRequestTimeout ||
+			status.StatusCode == http.StatusTooManyRequests ||
+			status.StatusCode >= http.StatusInternalServerError
+	}
+	var networkError net.Error
+	return errors.As(err, &networkError)
 }
 
 func (c *HTTPClient) CompleteUpload(ctx context.Context, token string, completion CompletionInstruction, upload UploadResult) error {
@@ -908,12 +936,20 @@ func (c *HTTPClient) publishSessionEndpoint(feed string) (string, error) {
 }
 
 func (c *HTTPClient) doJSON(ctx context.Context, method string, endpoint string, token string, body any, out any, expectedStatuses ...int) error {
-	var reader io.Reader
+	var content []byte
 	if body != nil {
-		content, err := json.Marshal(body)
+		encoded, err := json.Marshal(body)
 		if err != nil {
 			return fmt.Errorf("encode PackageMaze publish request: %w", err)
 		}
+		content = encoded
+	}
+	return c.doJSONBytes(ctx, method, endpoint, token, content, out, expectedStatuses...)
+}
+
+func (c *HTTPClient) doJSONBytes(ctx context.Context, method string, endpoint string, token string, content []byte, out any, expectedStatuses ...int) error {
+	var reader io.Reader
+	if content != nil {
 		reader = bytes.NewReader(content)
 	}
 	request, err := http.NewRequestWithContext(ctx, method, endpoint, reader)
@@ -923,7 +959,7 @@ func (c *HTTPClient) doJSON(ctx context.Context, method string, endpoint string,
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("Authorization", "Bearer "+token)
 	request.Header.Set(version.PackageMazeClientVersionHeader, version.PackageMazeClientVersion())
-	if body != nil {
+	if content != nil {
 		request.Header.Set("Content-Type", "application/json")
 	}
 	response, err := c.httpClient.Do(request)

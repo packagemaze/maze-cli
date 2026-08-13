@@ -151,10 +151,12 @@ PackageMaze owns npm and PyPI package/version decisions.
 Each invocation sends one opaque publication request identity. PackageMaze
 returns a prepared Artifact transfer Plan, either new or resumed; `maze` follows
 that Plan without exposing its storage implementation. The CLI does not carry a
-legacy client-created transfer path. Automatic Create retry, cross-invocation
-resume, persisted transfer progress, credential renewal, and parallel uploads
-remain future work. The CLI neither prints nor persists temporary transfer
-authorization.
+legacy client-created transfer path. If Plan creation has a transient or
+ambiguous failure, `maze` retries it once with the exact same request identity
+and bytes so PackageMaze can safely return the already-created Plan.
+Cross-invocation resume, persisted transfer progress, credential renewal, and
+parallel uploads remain future work. The CLI neither prints nor persists
+temporary transfer authorization.
 
 Every request from `maze` to PackageMaze carries
 `X-PackageMaze-Client-Version: maze/<version>`. PackageMaze can use that explicit
