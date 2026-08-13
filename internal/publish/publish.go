@@ -76,6 +76,18 @@ type UploadResult struct {
 	UploadID  string
 }
 
+type artifactTransferCompletionUncertainError struct {
+	cause error
+}
+
+func (e *artifactTransferCompletionUncertainError) Error() string {
+	return "Artifact transfer completion could not be confirmed"
+}
+
+func (e *artifactTransferCompletionUncertainError) Unwrap() error {
+	return e.cause
+}
+
 type Format string
 
 const (
@@ -326,11 +338,17 @@ func Run(ctx context.Context, config Config, paths []string, deps Dependencies, 
 		if _, err := fmt.Fprintf(reporter, "Uploading %s\n", artifact.Artifact.Filename); err != nil {
 			return Result{}, ResolvedConfig{}, err
 		}
-		upload, err := uploader.Upload(ctx, artifact, paths[index], reporter)
-		if err != nil {
-			return Result{}, ResolvedConfig{}, fmt.Errorf("upload %s: %w", artifact.Artifact.Filename, err)
+		upload, uploadErr := uploader.Upload(ctx, artifact, paths[index], reporter)
+		if uploadErr != nil {
+			var uncertain *artifactTransferCompletionUncertainError
+			if !errors.As(uploadErr, &uncertain) {
+				return Result{}, ResolvedConfig{}, fmt.Errorf("upload %s: %w", artifact.Artifact.Filename, uploadErr)
+			}
 		}
 		if err := client.CompleteUpload(ctx, resolved.Token, artifact.Completion, upload); err != nil {
+			if uploadErr != nil {
+				return Result{}, ResolvedConfig{}, fmt.Errorf("PackageMaze could not confirm the Artifact transfer: %w", err)
+			}
 			return Result{}, ResolvedConfig{}, err
 		}
 	}
@@ -852,14 +870,14 @@ func (c *HTTPClient) CreateSession(ctx context.Context, feed string, token strin
 		if err == nil {
 			return response, nil
 		}
-		if attempt == 1 || !retryableCreateSessionError(ctx, err) {
+		if attempt == 1 || !retryablePackageMazeRequestError(ctx, err) {
 			return CreatePublishSessionResponse{}, err
 		}
 	}
 	return CreatePublishSessionResponse{}, fmt.Errorf("PackageMaze publish request failed")
 }
 
-func retryableCreateSessionError(ctx context.Context, err error) bool {
+func retryablePackageMazeRequestError(ctx context.Context, err error) bool {
 	if ctx.Err() != nil {
 		return false
 	}
@@ -884,10 +902,23 @@ func (c *HTTPClient) CompleteUpload(ctx context.Context, token string, completio
 	if err := validateSameOriginPlanURL("completion", c.baseURL, completion.URL); err != nil {
 		return err
 	}
-	return c.doJSON(ctx, http.MethodPost, completion.URL, token, map[string]any{
+	content, err := json.Marshal(map[string]any{
 		"part_count": upload.PartCount,
 		"upload_id":  upload.UploadID,
-	}, nil, http.StatusAccepted)
+	})
+	if err != nil {
+		return fmt.Errorf("encode PackageMaze publish request: %w", err)
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		err := c.doJSONBytes(ctx, http.MethodPost, completion.URL, token, content, nil, http.StatusAccepted)
+		if err == nil {
+			return nil
+		}
+		if attempt == 1 || !retryablePackageMazeRequestError(ctx, err) {
+			return err
+		}
+	}
+	return fmt.Errorf("PackageMaze publish request failed")
 }
 
 func (c *HTTPClient) GetStatus(ctx context.Context, token string, statusURL string) (PublishSessionStatusResponse, error) {

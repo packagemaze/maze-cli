@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -212,6 +213,73 @@ func TestRunUsesPreparedUploadAndReportsAdoption(t *testing.T) {
 	}
 	if !result.Resumed {
 		t.Fatalf("result did not report adoption: %#v", result)
+	}
+}
+
+func TestRunSettlesAnUncertainTransferCompletionThroughPackageMaze(t *testing.T) {
+	path := writeTempArtifact(t, "large-package-1.0.0.tgz", "artifact bytes")
+	client := &fakeClient{}
+	client.createResponse = createResponseForFacts(t, "plan_123", []ArtifactFact{factForPath(t, path)})
+	client.statusResponses = []PublishSessionStatusResponse{
+		statusResponse("plan_123", "ready", client.createResponse.Plan.Artifacts),
+	}
+	uploader := &fakeUploader{
+		err:    &artifactTransferCompletionUncertainError{cause: io.ErrUnexpectedEOF},
+		result: UploadResult{PartCount: 1, UploadID: "prepared-upload-123"},
+	}
+
+	result, _, err := Run(
+		context.Background(),
+		Config{Feed: "your-org/npm", TokenEnv: DefaultTokenEnv, Wait: true},
+		[]string{path},
+		Dependencies{
+			Client:   client,
+			Env:      mapLookup(map[string]string{DefaultTokenEnv: "pm_publish_token"}),
+			Sleep:    func(context.Context, time.Duration) error { return nil },
+			Uploader: uploader,
+		},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if len(client.completed) != 1 || client.completed[0].result != uploader.result {
+		t.Fatalf("completion calls = %#v", client.completed)
+	}
+	if result.State != "ready" {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestRunKeepsUncertainTransferFailureProviderNeutral(t *testing.T) {
+	path := writeTempArtifact(t, "large-package-1.0.0.tgz", "artifact bytes")
+	client := &fakeClient{
+		completionErr: &StatusError{StatusCode: http.StatusNotFound},
+	}
+	client.createResponse = createResponseForFacts(t, "plan_123", []ArtifactFact{factForPath(t, path)})
+	uploader := &fakeUploader{
+		err:    &artifactTransferCompletionUncertainError{cause: errors.New("S3 response unavailable")},
+		result: UploadResult{PartCount: 1, UploadID: "prepared-upload-123"},
+	}
+
+	_, _, err := Run(
+		context.Background(),
+		Config{Feed: "your-org/npm", TokenEnv: DefaultTokenEnv, Wait: true},
+		[]string{path},
+		Dependencies{
+			Client:   client,
+			Env:      mapLookup(map[string]string{DefaultTokenEnv: "pm_publish_token"}),
+			Uploader: uploader,
+		},
+		nil,
+	)
+	if err == nil || !strings.Contains(err.Error(), "PackageMaze could not confirm the Artifact transfer") {
+		t.Fatalf("expected confirmation error, got %v", err)
+	}
+	for _, privateTerm := range []string{"S3", "R2", "Cloudflare", "bucket", "object key"} {
+		if strings.Contains(err.Error(), privateTerm) {
+			t.Fatalf("provider detail %q leaked in error: %v", privateTerm, err)
+		}
 	}
 }
 
@@ -434,6 +502,45 @@ func TestHTTPClientDoesNotRetryRejectedCreate(t *testing.T) {
 	}
 	if requests != 1 {
 		t.Fatalf("create requests = %d", requests)
+	}
+}
+
+func TestHTTPClientRetriesAmbiguousCompletionOnceWithExactRequest(t *testing.T) {
+	var bodies [][]byte
+	var versions []string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		body, err := io.ReadAll(request.Body)
+		if err != nil {
+			t.Fatalf("read request: %v", err)
+		}
+		bodies = append(bodies, body)
+		versions = append(versions, request.Header.Get(version.PackageMazeClientVersionHeader))
+		if len(bodies) == 1 {
+			http.Error(writer, "temporary", http.StatusServiceUnavailable)
+			return
+		}
+		writer.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+	client := NewClient(server.URL, true, server.Client())
+	completionURL := server.URL + "/your-org/npm/-/packagemaze/v1/publish-sessions/plan_123/artifacts/attempt_123/complete"
+
+	err := client.CompleteUpload(
+		context.Background(),
+		"secret",
+		CompletionInstruction{URL: completionURL},
+		UploadResult{PartCount: 2, UploadID: "prepared-upload-123"},
+	)
+	if err != nil {
+		t.Fatalf("CompleteUpload returned error: %v", err)
+	}
+	if len(bodies) != 2 || !bytes.Equal(bodies[0], bodies[1]) {
+		t.Fatalf("completion request bodies = %q", bodies)
+	}
+	for _, got := range versions {
+		if got != version.PackageMazeClientVersion() {
+			t.Fatalf("client version header = %q", got)
+		}
 	}
 }
 
@@ -750,6 +857,7 @@ func contains(values []string, expected string) bool {
 
 type fakeClient struct {
 	completed       []completionCall
+	completionErr   error
 	createFeed      string
 	createRequest   CreatePublishSessionRequest
 	createResponse  CreatePublishSessionResponse
@@ -773,7 +881,7 @@ func (f *fakeClient) CreateSession(_ context.Context, feed string, token string,
 
 func (f *fakeClient) CompleteUpload(_ context.Context, token string, completion CompletionInstruction, result UploadResult) error {
 	f.completed = append(f.completed, completionCall{completion: completion, result: result, token: token})
-	return nil
+	return f.completionErr
 }
 
 func (f *fakeClient) GetStatus(context.Context, string, string) (PublishSessionStatusResponse, error) {
@@ -787,6 +895,7 @@ func (f *fakeClient) GetStatus(context.Context, string, string) (PublishSessionS
 
 type fakeUploader struct {
 	artifact PlannedArtifact
+	err      error
 	path     string
 	result   UploadResult
 }
@@ -803,7 +912,7 @@ func (u *orderedUploader) Upload(_ context.Context, artifact PlannedArtifact, pa
 func (f *fakeUploader) Upload(_ context.Context, artifact PlannedArtifact, path string, _ io.Writer) (UploadResult, error) {
 	f.artifact = artifact
 	f.path = path
-	return f.result, nil
+	return f.result, f.err
 }
 
 func mapLookup(values map[string]string) func(string) (string, bool) {

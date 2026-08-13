@@ -54,7 +54,7 @@ func (u *S3MultipartUploader) Upload(ctx context.Context, artifact PlannedArtifa
 		},
 	})
 	if err != nil {
-		return UploadResult{}, fmt.Errorf("finish Artifact transfer: %w", err)
+		return UploadResult{PartCount: len(parts), UploadID: uploadID}, &artifactTransferCompletionUncertainError{cause: err}
 	}
 	return UploadResult{PartCount: len(parts), UploadID: uploadID}, nil
 }

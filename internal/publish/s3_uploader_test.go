@@ -2,6 +2,7 @@ package publish
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -45,6 +46,31 @@ func TestS3MultipartUploaderRejectsPlanWithoutPreparedUpload(t *testing.T) {
 	}
 }
 
+func TestS3MultipartUploaderPreservesIdentityWhenCompletionIsUncertain(t *testing.T) {
+	path := writeTempArtifact(t, "package-1.0.0.tgz", "artifact bytes")
+	artifact := s3UploadArtifact(t, path)
+	artifact.Upload.UploadID = "server-upload-123"
+	recorder := &s3RequestRecorder{completeError: context.Canceled}
+	uploader := &S3MultipartUploader{HTTPClient: recorder}
+
+	result, err := uploader.Upload(context.Background(), artifact, path, io.Discard)
+	var uncertain *artifactTransferCompletionUncertainError
+	if !errors.As(err, &uncertain) {
+		t.Fatalf("expected uncertain completion error, got %v", err)
+	}
+	if result.UploadID != "server-upload-123" || result.PartCount != 1 {
+		t.Fatalf("result = %#v", result)
+	}
+	if len(recorder.operations) < 2 || recorder.operations[0] != "upload-part" {
+		t.Fatalf("operations = %#v", recorder.operations)
+	}
+	for _, operation := range recorder.operations[1:] {
+		if operation != "complete" {
+			t.Fatalf("operations = %#v", recorder.operations)
+		}
+	}
+}
+
 func s3UploadArtifact(t *testing.T, path string) PlannedArtifact {
 	t.Helper()
 	var artifact PlannedArtifact
@@ -71,7 +97,8 @@ func s3UploadArtifact(t *testing.T, path string) PlannedArtifact {
 }
 
 type s3RequestRecorder struct {
-	operations []string
+	completeError error
+	operations    []string
 }
 
 func (r *s3RequestRecorder) Do(request *http.Request) (*http.Response, error) {
@@ -89,6 +116,9 @@ func (r *s3RequestRecorder) Do(request *http.Request) (*http.Response, error) {
 		return nil, fmt.Errorf("unexpected S3 request: %s %s", request.Method, request.URL.String())
 	}
 	r.operations = append(r.operations, operation)
+	if operation == "complete" && r.completeError != nil {
+		return nil, r.completeError
+	}
 	return &http.Response{
 		Body:       io.NopCloser(strings.NewReader(body)),
 		Header:     headers,

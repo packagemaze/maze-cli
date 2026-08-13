@@ -154,6 +154,8 @@ that Plan without exposing its storage implementation. The CLI does not carry a
 legacy client-created transfer path. If Plan creation has a transient or
 ambiguous failure, `maze` retries it once with the exact same request identity
 and bytes so PackageMaze can safely return the already-created Plan.
+If the transfer completion acknowledgement is lost, `maze` asks PackageMaze to
+confirm the immutable Artifact and continues only when PackageMaze can do so.
 Cross-invocation resume, persisted transfer progress, credential renewal, and
 parallel uploads remain future work. The CLI neither prints nor persists
 temporary transfer authorization.
