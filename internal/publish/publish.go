@@ -74,7 +74,11 @@ type Client interface {
 }
 
 type Uploader interface {
-	Upload(context.Context, PlannedArtifact, string, io.Writer) (UploadResult, error)
+	Upload(context.Context, PlannedArtifact, string, UploadOptions, io.Writer) (UploadResult, error)
+}
+
+type UploadOptions struct {
+	Resume bool
 }
 
 type UploadResult struct {
@@ -339,7 +343,9 @@ func Run(ctx context.Context, config Config, paths []string, deps Dependencies, 
 		if _, err := fmt.Fprintf(reporter, "Uploading %s\n", artifact.Artifact.Filename); err != nil {
 			return Result{}, ResolvedConfig{}, err
 		}
-		upload, uploadErr := uploader.Upload(ctx, artifact, paths[index], reporter)
+		upload, uploadErr := uploader.Upload(ctx, artifact, paths[index], UploadOptions{
+			Resume: session.PublishSession.Resumed,
+		}, reporter)
 		if uploadErr != nil {
 			var uncertain *artifactTransferCompletionUncertainError
 			if !errors.As(uploadErr, &uncertain) {

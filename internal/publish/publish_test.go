@@ -94,6 +94,9 @@ func TestRunExecutesBackendPlanAndWaits(t *testing.T) {
 	if uploader.path != path {
 		t.Fatalf("uploaded path = %q", uploader.path)
 	}
+	if uploader.options.Resume {
+		t.Fatal("fresh Plan unexpectedly enabled transfer reconciliation")
+	}
 	if len(client.completed) != 1 {
 		t.Fatalf("completed uploads = %#v", client.completed)
 	}
@@ -264,6 +267,9 @@ func TestRunResumesAnInterruptedPublicationWithoutPersistingTransferAuthorizatio
 	secondClient.statusResponses = []PublishSessionStatusResponse{
 		statusResponse("plan_123", "ready", secondClient.createResponse.Plan.Artifacts),
 	}
+	secondUploader := &fakeUploader{
+		result: UploadResult{PartCount: 1, UploadID: "prepared-upload-123"},
+	}
 	result, _, err := Run(
 		context.Background(),
 		Config{Feed: "your-org/npm", TokenEnv: DefaultTokenEnv, Wait: true},
@@ -277,9 +283,7 @@ func TestRunResumesAnInterruptedPublicationWithoutPersistingTransferAuthorizatio
 			},
 			ResumeStore: store,
 			Sleep:       func(context.Context, time.Duration) error { return nil },
-			Uploader: &fakeUploader{
-				result: UploadResult{PartCount: 1, UploadID: "prepared-upload-123"},
-			},
+			Uploader:    secondUploader,
 		},
 		nil,
 	)
@@ -291,6 +295,9 @@ func TestRunResumesAnInterruptedPublicationWithoutPersistingTransferAuthorizatio
 	}
 	if !result.Resumed || result.State != "ready" {
 		t.Fatalf("result = %#v", result)
+	}
+	if !secondUploader.options.Resume {
+		t.Fatal("adopted Plan did not enable transfer reconciliation")
 	}
 	entries, err = os.ReadDir(directory)
 	if err != nil || len(entries) != 0 {
@@ -978,6 +985,7 @@ func (f *fakeClient) GetStatus(context.Context, string, string) (PublishSessionS
 type fakeUploader struct {
 	artifact PlannedArtifact
 	err      error
+	options  UploadOptions
 	path     string
 	result   UploadResult
 }
@@ -986,13 +994,14 @@ type orderedUploader struct {
 	paths []string
 }
 
-func (u *orderedUploader) Upload(_ context.Context, artifact PlannedArtifact, path string, _ io.Writer) (UploadResult, error) {
+func (u *orderedUploader) Upload(_ context.Context, artifact PlannedArtifact, path string, _ UploadOptions, _ io.Writer) (UploadResult, error) {
 	u.paths = append(u.paths, path)
 	return UploadResult{PartCount: 1, UploadID: artifact.Upload.UploadID}, nil
 }
 
-func (f *fakeUploader) Upload(_ context.Context, artifact PlannedArtifact, path string, _ io.Writer) (UploadResult, error) {
+func (f *fakeUploader) Upload(_ context.Context, artifact PlannedArtifact, path string, options UploadOptions, _ io.Writer) (UploadResult, error) {
 	f.artifact = artifact
+	f.options = options
 	f.path = path
 	return f.result, f.err
 }
