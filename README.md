@@ -156,9 +156,12 @@ ambiguous failure, `maze` retries it once with the exact same request identity
 and bytes so PackageMaze can safely return the already-created Plan.
 If the transfer completion acknowledgement is lost, `maze` asks PackageMaze to
 confirm the immutable Artifact and continues only when PackageMaze can do so.
-Cross-invocation resume, persisted transfer progress, credential renewal, and
-parallel uploads remain future work. The CLI neither prints nor persists
-temporary transfer authorization.
+If an invocation stops before the Publish Session becomes terminal, rerunning
+the same ordered Artifact submission resumes the same PackageMaze Plan. The CLI
+keeps only a private, expiring local recovery identity; it neither prints nor
+persists temporary transfer authorization. A resumed transfer currently sends
+each Artifact again. Persisted part progress, credential renewal, and parallel
+uploads remain future work.
 
 Every request from `maze` to PackageMaze carries
 `X-PackageMaze-Client-Version: maze/<version>`. PackageMaze can use that explicit

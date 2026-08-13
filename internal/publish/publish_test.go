@@ -216,6 +216,88 @@ func TestRunUsesPreparedUploadAndReportsAdoption(t *testing.T) {
 	}
 }
 
+func TestRunResumesAnInterruptedPublicationWithoutPersistingTransferAuthorization(t *testing.T) {
+	directory := filepath.Join(t.TempDir(), "publish-resume")
+	store := NewFilePublicationResumeStore(directory)
+	now := time.Date(2026, 8, 13, 5, 0, 0, 0, time.UTC)
+	path := writeTempArtifact(t, "large-package-1.0.0.tgz", "artifact bytes")
+	facts := []ArtifactFact{factForPath(t, path)}
+	firstClient := &fakeClient{createResponse: createResponseForFacts(t, "plan_123", facts)}
+	firstClient.createResponse.PublishSession.ExpiresAt = now.Add(time.Hour).Format(time.RFC3339)
+
+	_, _, firstErr := Run(
+		context.Background(),
+		Config{Feed: "your-org/npm", TokenEnv: DefaultTokenEnv, Wait: true},
+		[]string{path},
+		Dependencies{
+			Client: firstClient,
+			Env:    mapLookup(map[string]string{DefaultTokenEnv: "pm_publish_token"}),
+			Now:    func() time.Time { return now },
+			PublicationRequestID: func() (string, error) {
+				return "submission_first", nil
+			},
+			ResumeStore: store,
+			Uploader:    &fakeUploader{err: errors.New("transfer interrupted")},
+		},
+		nil,
+	)
+	if firstErr == nil || !strings.Contains(firstErr.Error(), "transfer interrupted") {
+		t.Fatalf("expected interrupted transfer, got %v", firstErr)
+	}
+	entries, err := os.ReadDir(directory)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("resume entries = %#v, err = %v", entries, err)
+	}
+	content, err := os.ReadFile(filepath.Join(directory, entries[0].Name()))
+	if err != nil {
+		t.Fatalf("read resume record: %v", err)
+	}
+	for _, privateTerm := range []string{"credential", "endpoint", "bucket", "object_key", "upload_id", "publication_attempt_id"} {
+		if strings.Contains(strings.ToLower(string(content)), privateTerm) {
+			t.Fatalf("private term %q persisted in %s", privateTerm, content)
+		}
+	}
+
+	secondClient := &fakeClient{createResponse: createResponseForFacts(t, "plan_123", facts)}
+	secondClient.createResponse.PublishSession.ExpiresAt = now.Add(time.Hour).Format(time.RFC3339)
+	secondClient.createResponse.PublishSession.Resumed = true
+	secondClient.statusResponses = []PublishSessionStatusResponse{
+		statusResponse("plan_123", "ready", secondClient.createResponse.Plan.Artifacts),
+	}
+	result, _, err := Run(
+		context.Background(),
+		Config{Feed: "your-org/npm", TokenEnv: DefaultTokenEnv, Wait: true},
+		[]string{path},
+		Dependencies{
+			Client: secondClient,
+			Env:    mapLookup(map[string]string{DefaultTokenEnv: "pm_publish_token"}),
+			Now:    func() time.Time { return now.Add(time.Minute) },
+			PublicationRequestID: func() (string, error) {
+				return "submission_second", nil
+			},
+			ResumeStore: store,
+			Sleep:       func(context.Context, time.Duration) error { return nil },
+			Uploader: &fakeUploader{
+				result: UploadResult{PartCount: 1, UploadID: "prepared-upload-123"},
+			},
+		},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("resumed Run returned error: %v", err)
+	}
+	if secondClient.createRequest.PublicationRequestID != "submission_first" {
+		t.Fatalf("resumed submission id = %q", secondClient.createRequest.PublicationRequestID)
+	}
+	if !result.Resumed || result.State != "ready" {
+		t.Fatalf("result = %#v", result)
+	}
+	entries, err = os.ReadDir(directory)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("terminal resume entries = %#v, err = %v", entries, err)
+	}
+}
+
 func TestRunSettlesAnUncertainTransferCompletionThroughPackageMaze(t *testing.T) {
 	path := writeTempArtifact(t, "large-package-1.0.0.tgz", "artifact bytes")
 	client := &fakeClient{}

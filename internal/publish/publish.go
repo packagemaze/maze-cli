@@ -55,10 +55,16 @@ type Dependencies struct {
 	Command              string
 	Env                  ci.LookupEnv
 	HTTPClient           *http.Client
+	Now                  func() time.Time
 	PublicationRequestID func() (string, error)
+	ResumeStore          PublicationResumeStore
 	Sleep                func(context.Context, time.Duration) error
 	Stdin                io.Reader
 	Uploader             Uploader
+}
+
+func DefaultDependencies() Dependencies {
+	return Dependencies{ResumeStore: NewDefaultPublicationResumeStore()}
 }
 
 type Client interface {
@@ -297,18 +303,6 @@ func Run(ctx context.Context, config Config, paths []string, deps Dependencies, 
 		reporter = io.Discard
 	}
 
-	publicationRequestID := deps.PublicationRequestID
-	if publicationRequestID == nil {
-		publicationRequestID = newPublicationRequestID
-	}
-	requestID, err := publicationRequestID()
-	if err != nil {
-		return Result{}, ResolvedConfig{}, fmt.Errorf("create publication request identity: %w", err)
-	}
-	requestID = strings.TrimSpace(requestID)
-	if requestID == "" || len(requestID) > 1024 || strings.ContainsAny(requestID, "\r\n\x00") {
-		return Result{}, ResolvedConfig{}, fmt.Errorf("publication request identity is invalid")
-	}
 	request := CreatePublishSessionRequest{
 		Artifacts: facts,
 		Client: ClientInfo{
@@ -321,9 +315,13 @@ func Run(ctx context.Context, config Config, paths []string, deps Dependencies, 
 			Name:    firstNonEmpty(deps.Command, "maze"),
 			Version: version.Version,
 		},
-		Hints:                publishHints(resolved),
-		PublicationRequestID: requestID,
+		Hints: publishHints(resolved),
 	}
+	requestID, resumeKey, err := resolvePublicationRequestIdentity(resolved, request, deps)
+	if err != nil {
+		return Result{}, ResolvedConfig{}, err
+	}
+	request.PublicationRequestID = requestID
 	session, err := client.CreateSession(ctx, resolved.Feed, resolved.Token, request)
 	if err != nil {
 		return Result{}, ResolvedConfig{}, err
@@ -333,6 +331,9 @@ func Run(ctx context.Context, config Config, paths []string, deps Dependencies, 
 	}
 	if len(session.Plan.Artifacts) != len(paths) {
 		return Result{}, ResolvedConfig{}, fmt.Errorf("PackageMaze publish plan returned %d artifacts for %d local paths", len(session.Plan.Artifacts), len(paths))
+	}
+	if err := updatePublicationResumeExpiry(deps.ResumeStore, resumeKey, requestID, session.PublishSession.ExpiresAt, dependencyNow(deps)); err != nil {
+		return Result{}, ResolvedConfig{}, err
 	}
 	for index, artifact := range session.Plan.Artifacts {
 		if _, err := fmt.Fprintf(reporter, "Uploading %s\n", artifact.Artifact.Filename); err != nil {
@@ -376,10 +377,76 @@ func Run(ctx context.Context, config Config, paths []string, deps Dependencies, 
 		}
 	}
 	result := resultFromStatus(status, session)
+	if result.State == "ready" || result.State == "error" {
+		if err := clearPublicationResume(deps.ResumeStore, resumeKey, requestID); err != nil {
+			return result, resolved, err
+		}
+	}
 	if result.State == "error" {
 		return result, resolved, publishStatusError(status)
 	}
 	return result, resolved, nil
+}
+
+func resolvePublicationRequestIdentity(resolved ResolvedConfig, request CreatePublishSessionRequest, deps Dependencies) (string, string, error) {
+	publicationRequestID := deps.PublicationRequestID
+	if publicationRequestID == nil {
+		publicationRequestID = newPublicationRequestID
+	}
+	requestID, err := publicationRequestID()
+	if err != nil {
+		return "", "", fmt.Errorf("create publication request identity: %w", err)
+	}
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" || len(requestID) > 1_024 || strings.ContainsAny(requestID, "\r\n\x00") {
+		return "", "", fmt.Errorf("publication request identity is invalid")
+	}
+	if deps.ResumeStore == nil {
+		return requestID, "", nil
+	}
+	key, err := publicationResumeKey(resolved.PackageClientURL, resolved.Feed, request)
+	if err != nil {
+		return "", "", fmt.Errorf("prepare local publish recovery: %w", err)
+	}
+	now := dependencyNow(deps)
+	record, _, err := deps.ResumeStore.CreateOrAdopt(key, PublicationResumeRecord{
+		CreatedAt:    now.Format(time.RFC3339),
+		ExpiresAt:    now.Add(time.Hour).Format(time.RFC3339),
+		Schema:       publicationResumeRecordSchema,
+		SubmissionID: requestID,
+	}, now)
+	if err != nil {
+		return "", "", err
+	}
+	return record.SubmissionID, key, nil
+}
+
+func updatePublicationResumeExpiry(store PublicationResumeStore, key string, submissionID string, expiresAt string, now time.Time) error {
+	if store == nil {
+		return nil
+	}
+	parsed, err := time.Parse(time.RFC3339, expiresAt)
+	if err != nil || !parsed.After(now) {
+		return fmt.Errorf("PackageMaze publish plan expiry is invalid")
+	}
+	if err := store.UpdateExpiry(key, submissionID, parsed.UTC().Format(time.RFC3339)); err != nil {
+		return err
+	}
+	return nil
+}
+
+func dependencyNow(deps Dependencies) time.Time {
+	if deps.Now != nil {
+		return deps.Now().UTC().Truncate(time.Second)
+	}
+	return time.Now().UTC().Truncate(time.Second)
+}
+
+func clearPublicationResume(store PublicationResumeStore, key string, submissionID string) error {
+	if store == nil {
+		return nil
+	}
+	return store.Remove(key, submissionID)
 }
 
 func Resolve(config Config, deps Dependencies) (ResolvedConfig, error) {
