@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/packagemaze/maze-cli/internal/ci"
@@ -29,6 +30,7 @@ const (
 	DefaultTokenEnv           = "MAZE_TOKEN"
 	maxMultipartParts         = 10_000
 	maxMultipartPartSizeBytes = 64 * 1024 * 1024
+	maxConcurrentArtifacts    = 2
 	minMultipartPartSizeBytes = 5 * 1024 * 1024
 )
 
@@ -339,25 +341,14 @@ func Run(ctx context.Context, config Config, paths []string, deps Dependencies, 
 	if err := updatePublicationResumeExpiry(deps.ResumeStore, resumeKey, requestID, session.PublishSession.ExpiresAt, dependencyNow(deps)); err != nil {
 		return Result{}, ResolvedConfig{}, err
 	}
-	for index, artifact := range session.Plan.Artifacts {
+	progress := &lockedWriter{writer: reporter}
+	for _, artifact := range session.Plan.Artifacts {
 		if _, err := fmt.Fprintf(reporter, "Uploading %s\n", artifact.Artifact.Filename); err != nil {
 			return Result{}, ResolvedConfig{}, err
 		}
-		upload, uploadErr := uploader.Upload(ctx, artifact, paths[index], UploadOptions{
-			Resume: session.PublishSession.Resumed,
-		}, reporter)
-		if uploadErr != nil {
-			var uncertain *artifactTransferCompletionUncertainError
-			if !errors.As(uploadErr, &uncertain) {
-				return Result{}, ResolvedConfig{}, fmt.Errorf("upload %s: %w", artifact.Artifact.Filename, uploadErr)
-			}
-		}
-		if err := client.CompleteUpload(ctx, resolved.Token, artifact.Completion, upload); err != nil {
-			if uploadErr != nil {
-				return Result{}, ResolvedConfig{}, fmt.Errorf("PackageMaze could not confirm the Artifact transfer: %w", err)
-			}
-			return Result{}, ResolvedConfig{}, err
-		}
+	}
+	if err := transferPlannedArtifacts(ctx, client, uploader, resolved.Token, session, paths, progress); err != nil {
+		return Result{}, ResolvedConfig{}, err
 	}
 
 	status := PublishSessionStatusResponse{
@@ -392,6 +383,98 @@ func Run(ctx context.Context, config Config, paths []string, deps Dependencies, 
 		return result, resolved, publishStatusError(status)
 	}
 	return result, resolved, nil
+}
+
+type artifactTransferResult struct {
+	err   error
+	index int
+}
+
+func transferPlannedArtifacts(ctx context.Context, client Client, uploader Uploader, token string, session CreatePublishSessionResponse, paths []string, progress io.Writer) error {
+	transferCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	jobs := make(chan int, len(paths))
+	results := make(chan artifactTransferResult, len(paths))
+	for index := range paths {
+		jobs <- index
+	}
+	close(jobs)
+	workerCount := min(maxConcurrentArtifacts, len(paths))
+	var workers sync.WaitGroup
+	workers.Add(workerCount)
+	for range workerCount {
+		go func() {
+			defer workers.Done()
+			for index := range jobs {
+				if err := transferCtx.Err(); err != nil {
+					results <- artifactTransferResult{err: err, index: index}
+					continue
+				}
+				err := transferOnePlannedArtifact(
+					transferCtx,
+					client,
+					uploader,
+					token,
+					session.Plan.Artifacts[index],
+					paths[index],
+					session.PublishSession.Resumed,
+					progress,
+				)
+				if err != nil {
+					cancel()
+				}
+				results <- artifactTransferResult{err: err, index: index}
+			}
+		}()
+	}
+	workers.Wait()
+	close(results)
+	errorsByArtifact := make([]error, len(paths))
+	for result := range results {
+		errorsByArtifact[result.index] = result.err
+	}
+	for _, err := range errorsByArtifact {
+		if err != nil && !errors.Is(err, context.Canceled) {
+			return err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	for _, err := range errorsByArtifact {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func transferOnePlannedArtifact(ctx context.Context, client Client, uploader Uploader, token string, artifact PlannedArtifact, path string, resumed bool, progress io.Writer) error {
+	upload, uploadErr := uploader.Upload(ctx, artifact, path, UploadOptions{Resume: resumed}, progress)
+	if uploadErr != nil {
+		var uncertain *artifactTransferCompletionUncertainError
+		if !errors.As(uploadErr, &uncertain) {
+			return fmt.Errorf("upload %s: %w", artifact.Artifact.Filename, uploadErr)
+		}
+	}
+	if err := client.CompleteUpload(ctx, token, artifact.Completion, upload); err != nil {
+		if uploadErr != nil {
+			return fmt.Errorf("PackageMaze could not confirm the Artifact transfer: %w", err)
+		}
+		return err
+	}
+	return nil
+}
+
+type lockedWriter struct {
+	mu     sync.Mutex
+	writer io.Writer
+}
+
+func (w *lockedWriter) Write(content []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.writer.Write(content)
 }
 
 func resolvePublicationRequestIdentity(resolved ResolvedConfig, request CreatePublishSessionRequest, deps Dependencies) (string, string, error) {

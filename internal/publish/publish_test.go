@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -117,7 +118,7 @@ func TestRunExecutesBackendPlanAndWaits(t *testing.T) {
 	}
 }
 
-func TestRunPublishesMultipleArtifactsInDeclaredOrder(t *testing.T) {
+func TestRunPublishesMultipleArtifactsAndPreservesDeclaredResultOrder(t *testing.T) {
 	wheel := writeTempArtifact(t, "example-1.0.0-py3-none-any.whl", "wheel bytes")
 	sdist := writeTempArtifact(t, "example-1.0.0.tar.gz", "sdist bytes")
 	client := &fakeClient{}
@@ -162,19 +163,97 @@ func TestRunPublishesMultipleArtifactsInDeclaredOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
-	if got := strings.Join(uploader.paths, ","); got != wheel+","+sdist {
-		t.Fatalf("upload order = %q", got)
+	if got := uploader.uploadedPaths(); !got[wheel] || !got[sdist] || len(got) != 2 {
+		t.Fatalf("uploaded paths = %#v", got)
 	}
 	if len(client.completed) != 2 {
 		t.Fatalf("completion calls = %#v", client.completed)
 	}
-	for index, completion := range client.completed {
-		if completion.result.UploadID != client.createResponse.Plan.Artifacts[index].Upload.UploadID {
-			t.Fatalf("completion %d upload id = %q", index, completion.result.UploadID)
+	completedUploadIDs := map[string]bool{}
+	for _, completion := range client.completed {
+		completedUploadIDs[completion.result.UploadID] = true
+	}
+	for _, artifact := range client.createResponse.Plan.Artifacts {
+		if !completedUploadIDs[artifact.Upload.UploadID] {
+			t.Fatalf("missing completion for upload %q: %#v", artifact.Upload.UploadID, client.completed)
 		}
 	}
 	if len(result.Artifacts) != 2 || result.Artifacts[0].Filename != filepath.Base(wheel) || result.Artifacts[1].Filename != filepath.Base(sdist) {
 		t.Fatalf("result artifacts = %#v", result.Artifacts)
+	}
+}
+
+func TestRunBoundsConcurrentArtifactTransfers(t *testing.T) {
+	paths := []string{
+		writeTempArtifact(t, "example-1.0.0-py3-none-any.whl", "wheel bytes"),
+		writeTempArtifact(t, "example-1.0.0.tar.gz", "sdist bytes"),
+	}
+	client := &fakeClient{}
+	client.createResponse = createResponseForFacts(t, "plan_concurrent", []ArtifactFact{
+		factForPath(t, paths[0]),
+		factForPath(t, paths[1]),
+	})
+	client.createResponse.Plan.Wait.URL = strings.Replace(
+		client.createResponse.Plan.Wait.URL,
+		"/your-org/npm/",
+		"/your-org/pypi/",
+		1,
+	)
+	for index := range client.createResponse.Plan.Artifacts {
+		client.createResponse.Plan.Artifacts[index].Completion.URL = strings.Replace(
+			client.createResponse.Plan.Artifacts[index].Completion.URL,
+			"/your-org/npm/",
+			"/your-org/pypi/",
+			1,
+		)
+	}
+	client.statusResponses = []PublishSessionStatusResponse{
+		statusResponse("plan_concurrent", "ready", client.createResponse.Plan.Artifacts),
+	}
+	uploader := &blockingArtifactUploader{
+		release: make(chan struct{}),
+		started: make(chan string, len(paths)),
+	}
+	errCh := make(chan error, 1)
+	go func() {
+		_, _, err := Run(
+			context.Background(),
+			Config{Feed: "your-org/pypi", TokenEnv: DefaultTokenEnv, Wait: true},
+			paths,
+			Dependencies{
+				Client: client,
+				Env:    mapLookup(map[string]string{DefaultTokenEnv: "pm_publish_token"}),
+				PublicationRequestID: func() (string, error) {
+					return "publication_request_concurrent", nil
+				},
+				Sleep:    func(context.Context, time.Duration) error { return nil },
+				Uploader: uploader,
+			},
+			nil,
+		)
+		errCh <- err
+	}()
+	for range maxConcurrentArtifacts {
+		select {
+		case <-uploader.started:
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for concurrent Artifact transfers")
+		}
+	}
+	close(uploader.release)
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("Run returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for publication")
+	}
+	if got := uploader.maximumActive(); got != maxConcurrentArtifacts {
+		t.Fatalf("maximum concurrent Artifact transfers = %d, want %d", got, maxConcurrentArtifacts)
+	}
+	if got := uploader.callCount(); got != len(paths) {
+		t.Fatalf("Artifact transfer calls = %d, want %d", got, len(paths))
 	}
 }
 
@@ -945,6 +1024,7 @@ func contains(values []string, expected string) bool {
 }
 
 type fakeClient struct {
+	mu              sync.Mutex
 	completed       []completionCall
 	completionErr   error
 	createFeed      string
@@ -969,6 +1049,8 @@ func (f *fakeClient) CreateSession(_ context.Context, feed string, token string,
 }
 
 func (f *fakeClient) CompleteUpload(_ context.Context, token string, completion CompletionInstruction, result UploadResult) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.completed = append(f.completed, completionCall{completion: completion, result: result, token: token})
 	return f.completionErr
 }
@@ -991,12 +1073,68 @@ type fakeUploader struct {
 }
 
 type orderedUploader struct {
+	mu    sync.Mutex
 	paths []string
 }
 
 func (u *orderedUploader) Upload(_ context.Context, artifact PlannedArtifact, path string, _ UploadOptions, _ io.Writer) (UploadResult, error) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
 	u.paths = append(u.paths, path)
 	return UploadResult{PartCount: 1, UploadID: artifact.Upload.UploadID}, nil
+}
+
+func (u *orderedUploader) uploadedPaths() map[string]bool {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	paths := make(map[string]bool, len(u.paths))
+	for _, path := range u.paths {
+		paths[path] = true
+	}
+	return paths
+}
+
+type blockingArtifactUploader struct {
+	active    int
+	calls     int
+	maxActive int
+	mu        sync.Mutex
+	release   chan struct{}
+	started   chan string
+}
+
+func (u *blockingArtifactUploader) Upload(ctx context.Context, artifact PlannedArtifact, path string, _ UploadOptions, _ io.Writer) (UploadResult, error) {
+	u.mu.Lock()
+	u.active++
+	u.calls++
+	if u.active > u.maxActive {
+		u.maxActive = u.active
+	}
+	u.mu.Unlock()
+	u.started <- path
+	defer func() {
+		u.mu.Lock()
+		u.active--
+		u.mu.Unlock()
+	}()
+	select {
+	case <-u.release:
+		return UploadResult{PartCount: 1, UploadID: artifact.Upload.UploadID}, nil
+	case <-ctx.Done():
+		return UploadResult{}, ctx.Err()
+	}
+}
+
+func (u *blockingArtifactUploader) maximumActive() int {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.maxActive
+}
+
+func (u *blockingArtifactUploader) callCount() int {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.calls
 }
 
 func (f *fakeUploader) Upload(_ context.Context, artifact PlannedArtifact, path string, options UploadOptions, _ io.Writer) (UploadResult, error) {
