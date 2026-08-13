@@ -13,13 +13,15 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
-type R2MultipartUploader struct{}
+type R2MultipartUploader struct {
+	HTTPClient s3.HTTPClient
+}
 
 func NewR2MultipartUploader() *R2MultipartUploader {
 	return &R2MultipartUploader{}
 }
 
-func (u *R2MultipartUploader) Upload(ctx context.Context, artifact PlannedArtifact, path string, progress io.Writer) (UploadResult, error) {
+func (u *R2MultipartUploader) Upload(ctx context.Context, artifact PlannedArtifact, path string, progress io.Writer, options UploadOptions) (UploadResult, error) {
 	if err := validateR2UploadPlan(artifact); err != nil {
 		return UploadResult{}, err
 	}
@@ -30,32 +32,42 @@ func (u *R2MultipartUploader) Upload(ctx context.Context, artifact PlannedArtifa
 			artifact.Upload.Target.Credentials.SecretAccessKey,
 			artifact.Upload.Target.Credentials.SessionToken,
 		),
+		HTTPClient:   u.HTTPClient,
 		Region:       firstNonEmpty(artifact.Upload.Target.Region, "auto"),
 		UsePathStyle: true,
 	})
-	create, err := client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
-		Bucket:      aws.String(artifact.Upload.Target.Bucket),
-		ContentType: aws.String(artifact.Artifact.ContentType),
-		Key:         aws.String(artifact.Upload.Target.ObjectKey),
-	})
-	if err != nil {
-		return UploadResult{}, fmt.Errorf("create R2 multipart upload: %w", err)
+	uploadID := ""
+	serverCreated := options.ServerCreated
+	if serverCreated {
+		uploadID = artifact.Upload.R2UploadID
 	}
-	uploadID := aws.ToString(create.UploadId)
-	if uploadID == "" {
-		return UploadResult{}, fmt.Errorf("R2 multipart upload did not return an upload id")
+	if !serverCreated {
+		create, err := client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
+			Bucket:      aws.String(artifact.Upload.Target.Bucket),
+			ContentType: aws.String(artifact.Artifact.ContentType),
+			Key:         aws.String(artifact.Upload.Target.ObjectKey),
+		})
+		if err != nil {
+			return UploadResult{}, fmt.Errorf("create R2 multipart upload: %w", err)
+		}
+		uploadID = aws.ToString(create.UploadId)
+		if uploadID == "" {
+			return UploadResult{}, fmt.Errorf("R2 multipart upload did not return an upload id")
+		}
 	}
 
 	parts, uploadErr := uploadParts(ctx, client, artifact, path, uploadID, progress)
 	if uploadErr != nil {
-		_, _ = client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
-			Bucket:   aws.String(artifact.Upload.Target.Bucket),
-			Key:      aws.String(artifact.Upload.Target.ObjectKey),
-			UploadId: aws.String(uploadID),
-		})
+		if !serverCreated {
+			_, _ = client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
+				Bucket:   aws.String(artifact.Upload.Target.Bucket),
+				Key:      aws.String(artifact.Upload.Target.ObjectKey),
+				UploadId: aws.String(uploadID),
+			})
+		}
 		return UploadResult{}, uploadErr
 	}
-	_, err = client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
+	_, err := client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
 		Bucket:   aws.String(artifact.Upload.Target.Bucket),
 		Key:      aws.String(artifact.Upload.Target.ObjectKey),
 		UploadId: aws.String(uploadID),
@@ -63,12 +75,14 @@ func (u *R2MultipartUploader) Upload(ctx context.Context, artifact PlannedArtifa
 			Parts: parts,
 		},
 	})
-	if err != nil {
+	if err != nil && !serverCreated {
 		_, _ = client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
 			Bucket:   aws.String(artifact.Upload.Target.Bucket),
 			Key:      aws.String(artifact.Upload.Target.ObjectKey),
 			UploadId: aws.String(uploadID),
 		})
+	}
+	if err != nil {
 		return UploadResult{}, fmt.Errorf("complete R2 multipart upload: %w", err)
 	}
 	return UploadResult{PartCount: len(parts), R2UploadID: uploadID}, nil

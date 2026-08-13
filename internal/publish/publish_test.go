@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -40,8 +42,11 @@ func TestRunExecutesBackendPlanAndWaits(t *testing.T) {
 		},
 		[]string{path},
 		Dependencies{
-			Client:   client,
-			Env:      mapLookup(map[string]string{DefaultTokenEnv: "pm_publish_token"}),
+			Client: client,
+			Env:    mapLookup(map[string]string{DefaultTokenEnv: "pm_publish_token"}),
+			PublicationRequestID: func() (string, error) {
+				return "publication_request_test", nil
+			},
 			Sleep:    func(context.Context, time.Duration) error { return nil },
 			Uploader: uploader,
 		},
@@ -74,6 +79,12 @@ func TestRunExecutesBackendPlanAndWaits(t *testing.T) {
 	if !contains(client.createRequest.Client.Capabilities, "r2_multipart_upload_v1") {
 		t.Fatalf("client capabilities = %#v", client.createRequest.Client.Capabilities)
 	}
+	if !contains(client.createRequest.Client.Capabilities, "server_created_r2_multipart_upload_v1") {
+		t.Fatalf("client capabilities = %#v", client.createRequest.Client.Capabilities)
+	}
+	if client.createRequest.PublicationRequestID != "publication_request_test" {
+		t.Fatalf("publication request id = %q", client.createRequest.PublicationRequestID)
+	}
 	if uploader.path != path {
 		t.Fatalf("uploaded path = %q", uploader.path)
 	}
@@ -94,6 +105,133 @@ func TestRunExecutesBackendPlanAndWaits(t *testing.T) {
 	}
 	if strings.Contains(stderr.String(), "pm_publish_token") {
 		t.Fatalf("token leaked to stderr: %s", stderr.String())
+	}
+}
+
+func TestRunUsesServerCreatedMultipartUploadAndReportsAdoption(t *testing.T) {
+	path := writeTempArtifact(t, "large-package-1.0.0.tgz", "artifact bytes")
+	client := &fakeClient{}
+	client.createResponse = createResponseForFacts(t, "plan_123", []ArtifactFact{factForPath(t, path)})
+	client.createResponse.PublishSession.Resumed = true
+	client.createResponse.Plan.Capabilities = append(client.createResponse.Plan.Capabilities, "server_created_r2_multipart_upload_v1")
+	artifact := &client.createResponse.Plan.Artifacts[0]
+	artifact.PublicationAttemptID = "attempt_123"
+	artifact.Upload.R2UploadID = "r2-upload-server-created"
+	artifact.Completion.URL = "https://pkg.packagemaze.com/your-org/npm/-/packagemaze/v1/publish-sessions/plan_123/artifacts/attempt_123/complete"
+	client.statusResponses = []PublishSessionStatusResponse{
+		statusResponse("plan_123", "ready", client.createResponse.Plan.Artifacts),
+	}
+	uploader := &fakeUploader{result: UploadResult{PartCount: 1, R2UploadID: "r2-upload-server-created"}}
+
+	result, _, err := Run(
+		context.Background(),
+		Config{Feed: "your-org/npm", TokenEnv: DefaultTokenEnv, Wait: true},
+		[]string{path},
+		Dependencies{
+			Client: client,
+			Env:    mapLookup(map[string]string{DefaultTokenEnv: "pm_publish_token"}),
+			PublicationRequestID: func() (string, error) {
+				return "publication_request_retry", nil
+			},
+			Sleep:    func(context.Context, time.Duration) error { return nil },
+			Uploader: uploader,
+		},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if uploader.artifact.Upload.R2UploadID != "r2-upload-server-created" {
+		t.Fatalf("uploader plan = %#v", uploader.artifact.Upload)
+	}
+	if !uploader.options.ServerCreated {
+		t.Fatalf("uploader options = %#v", uploader.options)
+	}
+	if !result.Resumed {
+		t.Fatalf("result did not report adoption: %#v", result)
+	}
+}
+
+func TestRunRejectsServerCreatedPlanWithoutUploadID(t *testing.T) {
+	path := writeTempArtifact(t, "large-package-1.0.0.tgz", "artifact bytes")
+	client := &fakeClient{}
+	client.createResponse = createResponseForFacts(t, "plan_123", []ArtifactFact{factForPath(t, path)})
+	client.createResponse.Plan.Capabilities = append(client.createResponse.Plan.Capabilities, "server_created_r2_multipart_upload_v1")
+	artifact := &client.createResponse.Plan.Artifacts[0]
+	artifact.PublicationAttemptID = "attempt_123"
+	artifact.Completion.URL = "https://pkg.packagemaze.com/your-org/npm/-/packagemaze/v1/publish-sessions/plan_123/artifacts/attempt_123/complete"
+	uploader := &fakeUploader{}
+
+	_, _, err := Run(
+		context.Background(),
+		Config{Feed: "your-org/npm", TokenEnv: DefaultTokenEnv, Wait: true},
+		[]string{path},
+		Dependencies{
+			Client: client,
+			Env:    mapLookup(map[string]string{DefaultTokenEnv: "pm_publish_token"}),
+			PublicationRequestID: func() (string, error) {
+				return "publication_request_invalid", nil
+			},
+			Uploader: uploader,
+		},
+		nil,
+	)
+	if err == nil || !strings.Contains(err.Error(), "server-created upload plan is incomplete") {
+		t.Fatalf("expected incomplete plan error, got %v", err)
+	}
+	if uploader.path != "" {
+		t.Fatalf("uploader ran for invalid plan: %q", uploader.path)
+	}
+}
+
+func TestHTTPClientAcceptsAdoptedCreateResponse(t *testing.T) {
+	var bodies [][]byte
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		body, err := io.ReadAll(request.Body)
+		if err != nil {
+			t.Fatalf("read request: %v", err)
+		}
+		bodies = append(bodies, body)
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(writer, `{"schema_version":1,"publish_session":{"id":"plan_123","resumed":true},"plan":{"schema_version":1}}`)
+	}))
+	defer server.Close()
+	client := NewClient(server.URL, true, server.Client())
+	request := CreatePublishSessionRequest{PublicationRequestID: "publication_request_retry"}
+
+	response, err := client.CreateSession(context.Background(), "your-org/npm", "secret", request)
+	if err != nil {
+		t.Fatalf("CreateSession returned error: %v", err)
+	}
+	if len(bodies) != 1 {
+		t.Fatalf("request bodies = %q", bodies)
+	}
+	if !response.PublishSession.Resumed {
+		t.Fatalf("adopted response = %#v", response)
+	}
+}
+
+func TestHTTPClientDoesNotRetryCreateBeforeServerFlowIsKnown(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		requests++
+		http.Error(writer, "temporary", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+	client := NewClient(server.URL, true, server.Client())
+
+	_, err := client.CreateSession(
+		context.Background(),
+		"your-org/npm",
+		"secret",
+		CreatePublishSessionRequest{PublicationRequestID: "publication_request_retry"},
+	)
+	if err == nil {
+		t.Fatal("CreateSession unexpectedly succeeded")
+	}
+	if requests != 1 {
+		t.Fatalf("create requests = %d", requests)
 	}
 }
 
@@ -246,6 +384,7 @@ func TestWriteJSONOmitsSecrets(t *testing.T) {
 	result := Result{
 		ArtifactProtocol: "npm",
 		PublishSessionID: "pubsession_123",
+		Resumed:          true,
 		State:            "ready",
 		Artifacts: []ArtifactResult{{
 			Filename:       "large-package-1.0.0.tgz",
@@ -265,8 +404,18 @@ func TestWriteJSONOmitsSecrets(t *testing.T) {
 	if payload["publish_session_id"] != "pubsession_123" {
 		t.Fatalf("publish_session_id = %v", payload["publish_session_id"])
 	}
+	if payload["resumed"] != true {
+		t.Fatalf("resumed = %v", payload["resumed"])
+	}
 	if strings.Contains(stdout.String(), "secret") || strings.Contains(stdout.String(), "access_key") {
 		t.Fatalf("secret material leaked: %s", stdout.String())
+	}
+	var text bytes.Buffer
+	if err := Write(result, FormatText, &text); err != nil {
+		t.Fatalf("Write text returned error: %v", err)
+	}
+	if !strings.Contains(text.String(), "pubsession_123 ready resumed") {
+		t.Fatalf("resumed text output = %q", text.String())
 	}
 }
 
@@ -408,11 +557,15 @@ func (f *fakeClient) GetStatus(context.Context, string, string) (PublishSessionS
 }
 
 type fakeUploader struct {
-	path   string
-	result UploadResult
+	artifact PlannedArtifact
+	options  UploadOptions
+	path     string
+	result   UploadResult
 }
 
-func (f *fakeUploader) Upload(_ context.Context, _ PlannedArtifact, path string, _ io.Writer) (UploadResult, error) {
+func (f *fakeUploader) Upload(_ context.Context, artifact PlannedArtifact, path string, _ io.Writer, options UploadOptions) (UploadResult, error) {
+	f.artifact = artifact
+	f.options = options
 	f.path = path
 	return f.result, nil
 }

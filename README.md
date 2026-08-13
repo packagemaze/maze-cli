@@ -148,6 +148,12 @@ Feed for a versioned publish plan, uploads through the instructed direct R2
 multipart target, reports completion, and waits for the backend status contract.
 PackageMaze owns npm and PyPI package/version decisions.
 
+Each invocation sends one opaque publication request identity. When PackageMaze
+returns a server-created multipart upload, `maze` uses that exact upload instead
+of creating another one, and accepts a resumed server response. Automatic Create
+retry, cross-invocation resume, persisted part progress, credential renewal, and
+parallel uploads remain future work; the CLI never persists upload credentials.
+
 Authentication uses a PackageMaze Token with publish scope:
 
 - `MAZE_TOKEN`

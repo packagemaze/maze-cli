@@ -3,6 +3,7 @@ package publish
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -49,13 +50,14 @@ type Config struct {
 }
 
 type Dependencies struct {
-	Client     Client
-	Command    string
-	Env        ci.LookupEnv
-	HTTPClient *http.Client
-	Sleep      func(context.Context, time.Duration) error
-	Stdin      io.Reader
-	Uploader   Uploader
+	Client               Client
+	Command              string
+	Env                  ci.LookupEnv
+	HTTPClient           *http.Client
+	PublicationRequestID func() (string, error)
+	Sleep                func(context.Context, time.Duration) error
+	Stdin                io.Reader
+	Uploader             Uploader
 }
 
 type Client interface {
@@ -65,7 +67,11 @@ type Client interface {
 }
 
 type Uploader interface {
-	Upload(context.Context, PlannedArtifact, string, io.Writer) (UploadResult, error)
+	Upload(context.Context, PlannedArtifact, string, io.Writer, UploadOptions) (UploadResult, error)
+}
+
+type UploadOptions struct {
+	ServerCreated bool
 }
 
 type UploadResult struct {
@@ -100,9 +106,10 @@ type ClientInfo struct {
 }
 
 type CreatePublishSessionRequest struct {
-	Artifacts []ArtifactFact    `json:"artifacts"`
-	Client    ClientInfo        `json:"client"`
-	Hints     map[string]string `json:"hints,omitempty"`
+	Artifacts            []ArtifactFact    `json:"artifacts"`
+	Client               ClientInfo        `json:"client"`
+	Hints                map[string]string `json:"hints,omitempty"`
+	PublicationRequestID string            `json:"publication_request_id"`
 }
 
 type CreatePublishSessionResponse struct {
@@ -111,6 +118,7 @@ type CreatePublishSessionResponse struct {
 		ArtifactProtocol string `json:"artifact_protocol"`
 		ExpiresAt        string `json:"expires_at"`
 		ID               string `json:"id"`
+		Resumed          bool   `json:"resumed,omitempty"`
 		State            string `json:"state"`
 	} `json:"publish_session"`
 	SchemaVersion int `json:"schema_version"`
@@ -126,16 +134,18 @@ type PublishPlan struct {
 }
 
 type PlannedArtifact struct {
-	Artifact   ArtifactFact          `json:"artifact"`
-	ArtifactID string                `json:"artifact_id"`
-	Completion CompletionInstruction `json:"completion"`
-	Package    struct {
+	Artifact             ArtifactFact          `json:"artifact"`
+	ArtifactID           string                `json:"artifact_id"`
+	Completion           CompletionInstruction `json:"completion"`
+	PublicationAttemptID string                `json:"publication_attempt_id,omitempty"`
+	Package              struct {
 		Name    string `json:"name"`
 		Version string `json:"version"`
 	} `json:"package"`
 	Upload struct {
 		Kind          string `json:"kind"`
 		PartSizeBytes int64  `json:"part_size_bytes"`
+		R2UploadID    string `json:"r2_upload_id,omitempty"`
 		Target        struct {
 			Bucket      string `json:"bucket"`
 			Credentials struct {
@@ -204,6 +214,7 @@ type Result struct {
 	Artifacts        []ArtifactResult `json:"artifacts"`
 	ArtifactProtocol string           `json:"artifact_protocol,omitempty"`
 	PublishSessionID string           `json:"publish_session_id"`
+	Resumed          bool             `json:"resumed,omitempty"`
 	State            string           `json:"state"`
 }
 
@@ -277,6 +288,18 @@ func Run(ctx context.Context, config Config, paths []string, deps Dependencies, 
 		reporter = io.Discard
 	}
 
+	publicationRequestID := deps.PublicationRequestID
+	if publicationRequestID == nil {
+		publicationRequestID = newPublicationRequestID
+	}
+	requestID, err := publicationRequestID()
+	if err != nil {
+		return Result{}, ResolvedConfig{}, fmt.Errorf("create publication request identity: %w", err)
+	}
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" || len(requestID) > 1024 || strings.ContainsAny(requestID, "\r\n\x00") {
+		return Result{}, ResolvedConfig{}, fmt.Errorf("publication request identity is invalid")
+	}
 	request := CreatePublishSessionRequest{
 		Artifacts: facts,
 		Client: ClientInfo{
@@ -284,11 +307,13 @@ func Run(ctx context.Context, config Config, paths []string, deps Dependencies, 
 				"r2_multipart_upload_v1",
 				"r2_multipart_completion_v1",
 				"publish_session_status_v1",
+				"server_created_r2_multipart_upload_v1",
 			},
 			Name:    firstNonEmpty(deps.Command, "maze"),
 			Version: "",
 		},
-		Hints: publishHints(resolved),
+		Hints:                publishHints(resolved),
+		PublicationRequestID: requestID,
 	}
 	session, err := client.CreateSession(ctx, resolved.Feed, resolved.Token, request)
 	if err != nil {
@@ -300,12 +325,18 @@ func Run(ctx context.Context, config Config, paths []string, deps Dependencies, 
 	if len(session.Plan.Artifacts) != len(paths) {
 		return Result{}, ResolvedConfig{}, fmt.Errorf("PackageMaze publish plan returned %d artifacts for %d local paths", len(session.Plan.Artifacts), len(paths))
 	}
+	serverCreatedUploads := containsString(
+		session.Plan.Capabilities,
+		"server_created_r2_multipart_upload_v1",
+	)
 
 	for index, artifact := range session.Plan.Artifacts {
 		if _, err := fmt.Fprintf(reporter, "Uploading %s\n", artifact.Artifact.Filename); err != nil {
 			return Result{}, ResolvedConfig{}, err
 		}
-		upload, err := uploader.Upload(ctx, artifact, paths[index], reporter)
+		upload, err := uploader.Upload(ctx, artifact, paths[index], reporter, UploadOptions{
+			ServerCreated: serverCreatedUploads,
+		})
 		if err != nil {
 			return Result{}, ResolvedConfig{}, fmt.Errorf("upload %s: %w", artifact.Artifact.Filename, err)
 		}
@@ -392,7 +423,11 @@ func Write(result Result, format Format, writer io.Writer) error {
 	}
 	switch format {
 	case "", FormatText:
-		_, err := fmt.Fprintf(writer, "Publish Session %s %s\n", result.PublishSessionID, result.State)
+		resumed := ""
+		if result.Resumed {
+			resumed = " resumed"
+		}
+		_, err := fmt.Fprintf(writer, "Publish Session %s %s%s\n", result.PublishSessionID, result.State, resumed)
 		if err != nil {
 			return err
 		}
@@ -456,6 +491,14 @@ func contentTypeForPath(path string) string {
 		return contentType
 	}
 	return "application/octet-stream"
+}
+
+func newPublicationRequestID() (string, error) {
+	var random [16]byte
+	if _, err := rand.Read(random[:]); err != nil {
+		return "", err
+	}
+	return "publication_request_" + hex.EncodeToString(random[:]), nil
 }
 
 func waitForStatus(ctx context.Context, client Client, token string, wait WaitInstruction, sleep func(context.Context, time.Duration) error) (PublishSessionStatusResponse, error) {
@@ -525,11 +568,39 @@ func validatePlan(response CreatePublishSessionResponse, config ResolvedConfig) 
 		if artifact.Completion.Method != http.MethodPost {
 			return fmt.Errorf("PackageMaze publish plan completion method is unsupported")
 		}
-		if err := validatePackageMazePlanURL("completion", config, artifact.Completion.URL, "upload-sessions", "/complete"); err != nil {
+		if err := validateCompletionPlanURL(config, response, artifact); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func validateCompletionPlanURL(config ResolvedConfig, response CreatePublishSessionResponse, artifact PlannedArtifact) error {
+	serverCreated := containsString(response.Plan.Capabilities, "server_created_r2_multipart_upload_v1")
+	if !serverCreated {
+		return validatePackageMazePlanURL("completion", config, artifact.Completion.URL, "upload-sessions", "/complete")
+	}
+	if strings.TrimSpace(artifact.PublicationAttemptID) == "" || strings.TrimSpace(artifact.Upload.R2UploadID) == "" {
+		return fmt.Errorf("PackageMaze server-created upload plan is incomplete")
+	}
+	if err := validatePackageMazePlanURL("completion", config, artifact.Completion.URL, "publish-sessions", "/complete"); err != nil {
+		return err
+	}
+	parsed, _ := url.Parse(artifact.Completion.URL)
+	expected := "/" + url.PathEscape(response.PublishSession.ID) + "/artifacts/" + url.PathEscape(artifact.PublicationAttemptID) + "/complete"
+	if !strings.HasSuffix(parsed.EscapedPath(), expected) {
+		return fmt.Errorf("PackageMaze publish plan completion URL does not match its Plan and Publication Attempt")
+	}
+	return nil
+}
+
+func containsString(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func validatePackageMazePlanURL(label string, config ResolvedConfig, value string, collection string, suffix string) error {
@@ -628,6 +699,7 @@ func resultFromStatus(status PublishSessionStatusResponse, create CreatePublishS
 	result := Result{
 		ArtifactProtocol: create.PublishSession.ArtifactProtocol,
 		PublishSessionID: firstNonEmpty(status.PublishSession.ID, create.PublishSession.ID),
+		Resumed:          create.PublishSession.Resumed,
 		State:            firstNonEmpty(status.PublishSession.State, create.PublishSession.State),
 	}
 	for _, artifact := range status.Artifacts {
@@ -782,7 +854,7 @@ func (c *HTTPClient) CreateSession(ctx context.Context, feed string, token strin
 		return CreatePublishSessionResponse{}, err
 	}
 	var response CreatePublishSessionResponse
-	if err := c.doJSON(ctx, http.MethodPost, endpoint, token, request, http.StatusCreated, &response); err != nil {
+	if err := c.doJSON(ctx, http.MethodPost, endpoint, token, request, &response, http.StatusOK, http.StatusCreated); err != nil {
 		return CreatePublishSessionResponse{}, err
 	}
 	return response, nil
@@ -798,7 +870,7 @@ func (c *HTTPClient) CompleteUpload(ctx context.Context, token string, completio
 	return c.doJSON(ctx, http.MethodPost, completion.URL, token, map[string]any{
 		"part_count":   upload.PartCount,
 		"r2_upload_id": upload.R2UploadID,
-	}, http.StatusAccepted, nil)
+	}, nil, http.StatusAccepted)
 }
 
 func (c *HTTPClient) GetStatus(ctx context.Context, token string, statusURL string) (PublishSessionStatusResponse, error) {
@@ -809,7 +881,7 @@ func (c *HTTPClient) GetStatus(ctx context.Context, token string, statusURL stri
 		return PublishSessionStatusResponse{}, err
 	}
 	var response PublishSessionStatusResponse
-	if err := c.doJSON(ctx, http.MethodGet, statusURL, token, nil, http.StatusOK, &response); err != nil {
+	if err := c.doJSON(ctx, http.MethodGet, statusURL, token, nil, &response, http.StatusOK); err != nil {
 		return PublishSessionStatusResponse{}, err
 	}
 	return response, nil
@@ -846,7 +918,7 @@ func (c *HTTPClient) publishSessionEndpoint(feed string) (string, error) {
 	return endpoint, nil
 }
 
-func (c *HTTPClient) doJSON(ctx context.Context, method string, endpoint string, token string, body any, expectedStatus int, out any) error {
+func (c *HTTPClient) doJSON(ctx context.Context, method string, endpoint string, token string, body any, out any, expectedStatuses ...int) error {
 	var reader io.Reader
 	if body != nil {
 		content, err := json.Marshal(body)
@@ -869,7 +941,7 @@ func (c *HTTPClient) doJSON(ctx context.Context, method string, endpoint string,
 		return fmt.Errorf("PackageMaze publish request failed: %w", err)
 	}
 	defer response.Body.Close()
-	if response.StatusCode != expectedStatus {
+	if !containsStatus(expectedStatuses, response.StatusCode) {
 		return &StatusError{
 			StatusCode: response.StatusCode,
 			Endpoint:   endpoint,
@@ -883,6 +955,15 @@ func (c *HTTPClient) doJSON(ctx context.Context, method string, endpoint string,
 		return &MalformedResponseError{Endpoint: endpoint, Err: err}
 	}
 	return nil
+}
+
+func containsStatus(values []int, expected int) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func responseDetail(reader io.Reader) string {

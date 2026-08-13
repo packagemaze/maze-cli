@@ -286,7 +286,7 @@ type recordingUploader struct {
 	result publishcmd.UploadResult
 }
 
-func (r *recordingUploader) Upload(_ context.Context, _ publishcmd.PlannedArtifact, path string, _ io.Writer) (publishcmd.UploadResult, error) {
+func (r *recordingUploader) Upload(_ context.Context, _ publishcmd.PlannedArtifact, path string, _ io.Writer, _ publishcmd.UploadOptions) (publishcmd.UploadResult, error) {
 	r.path = path
 	return r.result, nil
 }
