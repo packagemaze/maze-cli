@@ -1,13 +1,13 @@
 package publish
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
@@ -15,6 +15,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
 )
+
+const maxConcurrentPartTransfers = 4
 
 type S3MultipartUploader struct {
 	HTTPClient s3.HTTPClient
@@ -143,48 +145,117 @@ func uploadParts(ctx context.Context, client *s3.Client, artifact PlannedArtifac
 	defer file.Close()
 
 	partCount := artifactPartCount(artifact)
-	completed := make([]types.CompletedPart, 0, partCount)
+	completed := make([]types.CompletedPart, partCount)
+	missing := make([]int, 0, partCount-len(uploaded))
 	for partIndex := 0; partIndex < partCount; partIndex++ {
 		partNumber := int32(partIndex + 1)
 		if existing, ok := uploaded[partNumber]; ok {
-			completed = append(completed, existing)
+			completed[partIndex] = existing
 			if progress != nil {
 				_, _ = fmt.Fprintf(progress, "Reused transferred part %d of %s\n", partNumber, artifact.Artifact.Filename)
 			}
 			continue
 		}
-		readSize := artifactPartSize(artifact, partIndex+1)
-		part := make([]byte, int(readSize))
-		read, readErr := file.ReadAt(part, int64(partIndex)*artifact.Upload.PartSizeBytes)
-		if readErr != nil && readErr != io.EOF {
-			return nil, fmt.Errorf("read upload part: %w", readErr)
-		}
-		if int64(read) != readSize {
-			return nil, fmt.Errorf("read upload part: Artifact changed during transfer")
-		}
-		output, err := client.UploadPart(ctx, &s3.UploadPartInput{
-			Body:          bytes.NewReader(part),
-			Bucket:        aws.String(artifact.Upload.Target.Bucket),
-			ContentLength: aws.Int64(readSize),
-			Key:           aws.String(artifact.Upload.Target.ObjectKey),
-			PartNumber:    aws.Int32(partNumber),
-			UploadId:      aws.String(uploadID),
-		})
-		if err != nil {
-			return nil, fmt.Errorf("transfer Artifact part %d: %w", partNumber, err)
-		}
-		completed = append(completed, types.CompletedPart{
-			ETag:       output.ETag,
-			PartNumber: aws.Int32(partNumber),
-		})
-		if progress != nil {
-			_, _ = fmt.Fprintf(progress, "Uploaded part %d of %s\n", partNumber, artifact.Artifact.Filename)
-		}
+		missing = append(missing, partIndex)
 	}
-	if len(completed) == 0 {
+	if partCount == 0 {
 		return nil, fmt.Errorf("upload artifact was empty")
 	}
+	if err := uploadMissingParts(ctx, client, artifact, file, uploadID, missing, completed, progress); err != nil {
+		return nil, err
+	}
 	return completed, nil
+}
+
+type partTransferResult struct {
+	err       error
+	part      types.CompletedPart
+	partIndex int
+}
+
+func uploadMissingParts(ctx context.Context, client *s3.Client, artifact PlannedArtifact, file *os.File, uploadID string, missing []int, completed []types.CompletedPart, progress io.Writer) error {
+	if len(missing) == 0 {
+		return nil
+	}
+	transferCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	jobs := make(chan int, len(missing))
+	results := make(chan partTransferResult, len(missing))
+	for _, partIndex := range missing {
+		jobs <- partIndex
+	}
+	close(jobs)
+	workerCount := min(maxConcurrentPartTransfers, len(missing))
+	var workers sync.WaitGroup
+	workers.Add(workerCount)
+	for range workerCount {
+		go func() {
+			defer workers.Done()
+			for partIndex := range jobs {
+				if err := transferCtx.Err(); err != nil {
+					results <- partTransferResult{err: err, partIndex: partIndex}
+					continue
+				}
+				part, err := uploadOnePart(transferCtx, client, artifact, file, uploadID, partIndex)
+				if err != nil {
+					cancel()
+				}
+				results <- partTransferResult{err: err, part: part, partIndex: partIndex}
+			}
+		}()
+	}
+	workers.Wait()
+	close(results)
+	errorsByPart := make([]error, artifactPartCount(artifact))
+	for result := range results {
+		errorsByPart[result.partIndex] = result.err
+		if result.err == nil {
+			completed[result.partIndex] = result.part
+		}
+	}
+	for _, err := range errorsByPart {
+		if err != nil && !errors.Is(err, context.Canceled) {
+			return err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	for _, err := range errorsByPart {
+		if err != nil {
+			return err
+		}
+	}
+	if progress != nil {
+		for _, partIndex := range missing {
+			_, _ = fmt.Fprintf(progress, "Uploaded part %d of %s\n", partIndex+1, artifact.Artifact.Filename)
+		}
+	}
+	return nil
+}
+
+func uploadOnePart(ctx context.Context, client *s3.Client, artifact PlannedArtifact, file *os.File, uploadID string, partIndex int) (types.CompletedPart, error) {
+	partNumber := int32(partIndex + 1)
+	readSize := artifactPartSize(artifact, partIndex+1)
+	part := io.NewSectionReader(file, int64(partIndex)*artifact.Upload.PartSizeBytes, readSize)
+	output, err := client.UploadPart(ctx, &s3.UploadPartInput{
+		Body:          part,
+		Bucket:        aws.String(artifact.Upload.Target.Bucket),
+		ContentLength: aws.Int64(readSize),
+		Key:           aws.String(artifact.Upload.Target.ObjectKey),
+		PartNumber:    aws.Int32(partNumber),
+		UploadId:      aws.String(uploadID),
+	})
+	if err != nil {
+		return types.CompletedPart{}, fmt.Errorf("transfer Artifact part %d: %w", partNumber, err)
+	}
+	if output.ETag == nil || strings.TrimSpace(*output.ETag) == "" {
+		return types.CompletedPart{}, fmt.Errorf("transfer Artifact part %d returned an invalid receipt", partNumber)
+	}
+	return types.CompletedPart{
+		ETag:       output.ETag,
+		PartNumber: aws.Int32(partNumber),
+	}, nil
 }
 
 func artifactPartCount(artifact PlannedArtifact) int {

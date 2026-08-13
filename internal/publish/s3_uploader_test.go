@@ -11,7 +11,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestS3MultipartUploaderUsesPreparedUploadWithoutCreateOrAbort(t *testing.T) {
@@ -105,6 +107,40 @@ func TestS3MultipartUploaderPaginatesTransferredPartsAndCompletesInOrder(t *test
 	if strings.Index(recorder.completeBody, "part-etag-1") > strings.Index(recorder.completeBody, "part-etag-new-2") ||
 		strings.Index(recorder.completeBody, "part-etag-new-2") > strings.Index(recorder.completeBody, "part-etag-3") {
 		t.Fatalf("completion parts were not ordered: %s", recorder.completeBody)
+	}
+}
+
+func TestS3MultipartUploaderBoundsConcurrentPartTransfers(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "package-1.0.0.tgz")
+	content := bytes.Repeat([]byte("a"), 3*minMultipartPartSizeBytes+17)
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatalf("write Artifact: %v", err)
+	}
+	artifact := s3UploadArtifact(t, path)
+	artifact.Upload.UploadID = "server-upload-123"
+	recorder := &s3RequestRecorder{
+		uploadRelease: make(chan struct{}),
+		uploadStarted: make(chan struct{}, maxConcurrentPartTransfers),
+	}
+	uploader := &S3MultipartUploader{HTTPClient: recorder}
+	result := make(chan error, 1)
+	go func() {
+		_, err := uploader.Upload(context.Background(), artifact, path, UploadOptions{}, io.Discard)
+		result <- err
+	}()
+	for range maxConcurrentPartTransfers {
+		select {
+		case <-recorder.uploadStarted:
+		case <-time.After(time.Second):
+			t.Fatal("part transfers did not start concurrently")
+		}
+	}
+	close(recorder.uploadRelease)
+	if err := <-result; err != nil {
+		t.Fatalf("Upload returned error: %v", err)
+	}
+	if recorder.maxActiveUploads != maxConcurrentPartTransfers {
+		t.Fatalf("max active uploads = %d", recorder.maxActiveUploads)
 	}
 }
 
@@ -225,20 +261,26 @@ func s3UploadArtifact(t *testing.T, path string) PlannedArtifact {
 }
 
 type s3RequestRecorder struct {
+	activeUploads     int
 	completeError     error
 	completeBody      string
 	listCalls         int
 	listResponses     []string
 	listStatuses      []int
 	listedParts       map[int32]int64
+	maxActiveUploads  int
+	mu                sync.Mutex
 	operations        []string
 	uploadPartNumbers []int32
+	uploadRelease     chan struct{}
+	uploadStarted     chan struct{}
 }
 
 func (r *s3RequestRecorder) Do(request *http.Request) (*http.Response, error) {
 	operation := ""
 	body := ""
 	headers := make(http.Header)
+	r.mu.Lock()
 	switch {
 	case request.Method == http.MethodGet && request.URL.Query().Has("uploadId"):
 		operation = "list-parts"
@@ -261,21 +303,41 @@ func (r *s3RequestRecorder) Do(request *http.Request) (*http.Response, error) {
 		partNumber, _ := strconv.ParseInt(request.URL.Query().Get("partNumber"), 10, 32)
 		headers.Set("ETag", fmt.Sprintf(`"part-etag-new-%d"`, partNumber))
 		r.uploadPartNumbers = append(r.uploadPartNumbers, int32(partNumber))
+		r.activeUploads++
+		if r.activeUploads > r.maxActiveUploads {
+			r.maxActiveUploads = r.activeUploads
+		}
 	case request.Method == http.MethodPost && request.URL.Query().Has("uploadId"):
 		operation = "complete"
 		completion, _ := io.ReadAll(request.Body)
 		r.completeBody = string(completion)
 		body = `<CompleteMultipartUploadResult><ETag>"complete-etag"</ETag></CompleteMultipartUploadResult>`
 	default:
+		r.mu.Unlock()
 		return nil, fmt.Errorf("unexpected S3 request: %s %s", request.Method, request.URL.String())
 	}
 	r.operations = append(r.operations, operation)
-	if operation == "complete" && r.completeError != nil {
-		return nil, r.completeError
-	}
 	status := http.StatusOK
 	if operation == "list-parts" && r.listCalls <= len(r.listStatuses) {
 		status = r.listStatuses[r.listCalls-1]
+	}
+	completeError := r.completeError
+	uploadRelease := r.uploadRelease
+	uploadStarted := r.uploadStarted
+	r.mu.Unlock()
+	if operation == "upload-part" {
+		if uploadStarted != nil {
+			uploadStarted <- struct{}{}
+		}
+		if uploadRelease != nil {
+			<-uploadRelease
+		}
+		r.mu.Lock()
+		r.activeUploads--
+		r.mu.Unlock()
+	}
+	if operation == "complete" && completeError != nil {
+		return nil, completeError
 	}
 	return &http.Response{
 		Body:       io.NopCloser(strings.NewReader(body)),

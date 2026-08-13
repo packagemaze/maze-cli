@@ -161,7 +161,8 @@ the same ordered Artifact submission resumes the same PackageMaze Plan. The CLI
 keeps only a private, expiring local recovery identity; it neither prints nor
 persists temporary transfer authorization. A resumed transfer currently sends
 only the Artifact parts that PackageMaze's transfer destination has not already
-accepted. Credential renewal and parallel uploads remain future work.
+accepted. Independent missing parts transfer under a fixed concurrency bound;
+Artifact-level parallelism and credential renewal remain future work.
 
 Every request from `maze` to PackageMaze carries
 `X-PackageMaze-Client-Version: maze/<version>`. PackageMaze can use that explicit
