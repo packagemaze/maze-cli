@@ -170,7 +170,7 @@ func TestPublishCommandJSON(t *testing.T) {
 	client.createResponse = publishCreateResponse(artifactPath)
 	client.statusResponse = publishStatusResponse(client.createResponse)
 	uploader := &recordingUploader{
-		result: publishcmd.UploadResult{PartCount: 1, R2UploadID: "r2-upload-1"},
+		result: publishcmd.UploadResult{PartCount: 1, UploadID: "upload-1"},
 	}
 	stdout, stderr, err := runCommandWithPublishDeps(
 		auth.Dependencies{},
@@ -286,7 +286,7 @@ type recordingUploader struct {
 	result publishcmd.UploadResult
 }
 
-func (r *recordingUploader) Upload(_ context.Context, _ publishcmd.PlannedArtifact, path string, _ io.Writer) (publishcmd.UploadResult, error) {
+func (r *recordingUploader) Upload(_ context.Context, _ publishcmd.PlannedArtifact, path string, _ publishcmd.UploadOptions, _ io.Writer) (publishcmd.UploadResult, error) {
 	r.path = path
 	return r.result, nil
 }
@@ -299,6 +299,12 @@ func publishCreateResponse(path string) publishcmd.CreatePublishSessionResponse 
 	response.PublishSession.ArtifactProtocol = "npm"
 	response.Plan.Kind = "package_publish_plan"
 	response.Plan.SchemaVersion = 1
+	response.Plan.Capabilities = []string{
+		"s3_multipart_upload_v1",
+		"s3_multipart_completion_v1",
+		"publish_session_status_v1",
+		"prepared_s3_multipart_upload_v1",
+	}
 	response.Plan.Wait.URL = "https://pkg.packagemaze.com/your-org/npm/-/packagemaze/v1/publish-sessions/pubsession_cli"
 	response.Plan.Wait.IntervalSeconds = 1
 	response.Plan.Wait.TimeoutSeconds = 30
@@ -307,11 +313,12 @@ func publishCreateResponse(path string) publishcmd.CreatePublishSessionResponse 
 	artifact.Artifact.SizeBytes = int64(len("artifact bytes"))
 	artifact.Artifact.SHA256 = strings.Repeat("a", 64)
 	artifact.Artifact.ContentType = "application/octet-stream"
+	artifact.PublicationAttemptID = "attempt_cli"
 	artifact.Completion.Method = "POST"
-	artifact.Completion.URL = "https://pkg.packagemaze.com/your-org/npm/-/packagemaze/v1/upload-sessions/uploadsession_cli/complete"
+	artifact.Completion.URL = "https://pkg.packagemaze.com/your-org/npm/-/packagemaze/v1/publish-sessions/pubsession_cli/artifacts/attempt_cli/complete"
 	artifact.Package.Name = "large-package"
 	artifact.Package.Version = "1.0.0"
-	artifact.Upload.Kind = "r2_multipart_upload_v1"
+	artifact.Upload.Kind = "s3_multipart_upload_v1"
 	artifact.Upload.PartSizeBytes = 5 * 1024 * 1024
 	artifact.Upload.Target.Bucket = "packagemaze-artifacts"
 	artifact.Upload.Target.Credentials.AccessKeyID = "r2-temp-access-key"
@@ -321,6 +328,7 @@ func publishCreateResponse(path string) publishcmd.CreatePublishSessionResponse 
 	artifact.Upload.Target.ObjectKey = "uploads/object"
 	artifact.Upload.Target.Region = "auto"
 	artifact.Upload.UploadSessionID = "uploadsession_cli"
+	artifact.Upload.UploadID = "prepared-upload-cli"
 	response.Plan.Artifacts = []publishcmd.PlannedArtifact{artifact}
 	return response
 }

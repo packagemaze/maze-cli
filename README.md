@@ -144,9 +144,31 @@ maze publish ./package-1.0.0.tgz --feed <organization>/<feed> --json
 
 `maze publish` is a generic executor for PackageMaze Publish Sessions. It
 computes filename, byte size, SHA-256, and content type for each path, asks the
-Feed for a versioned publish plan, uploads through the instructed direct R2
-multipart target, reports completion, and waits for the backend status contract.
+Feed for a versioned Publish Plan, transfers each Artifact as instructed,
+reports completion, and waits for PackageMaze status.
 PackageMaze owns npm and PyPI package/version decisions.
+
+Each invocation sends one opaque publication request identity. PackageMaze
+returns a prepared Artifact transfer Plan, either new or resumed; `maze` follows
+that Plan without exposing its storage implementation. The CLI does not carry a
+legacy client-created transfer path. If Plan creation has a transient or
+ambiguous failure, `maze` retries it once with the exact same request identity
+and bytes so PackageMaze can safely return the already-created Plan.
+If the transfer completion acknowledgement is lost, `maze` asks PackageMaze to
+confirm the immutable Artifact and continues only when PackageMaze can do so.
+If an invocation stops before the Publish Session becomes terminal, rerunning
+the same ordered Artifact submission resumes the same PackageMaze Plan. The CLI
+keeps only a private, expiring local recovery identity; it neither prints nor
+persists temporary transfer authorization. A resumed transfer currently sends
+only the Artifact parts that PackageMaze's transfer destination has not already
+accepted. Independent missing parts transfer under a fixed concurrency bound;
+independent Artifacts also transfer under a separate fixed bound. Credential
+renewal remains future work.
+
+Every request from `maze` to PackageMaze carries
+`X-PackageMaze-Client-Version: maze/<version>`. PackageMaze can use that explicit
+version for diagnostics and support policy without inferring it from output or
+transfer details.
 
 Authentication uses a PackageMaze Token with publish scope:
 

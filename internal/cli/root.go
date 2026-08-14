@@ -17,7 +17,7 @@ func DefaultDependencies() auth.Dependencies {
 }
 
 func NewRootCommand(deps auth.Dependencies) *cobra.Command {
-	return NewRootCommandWithPublishDependencies(deps, publishcmd.Dependencies{})
+	return NewRootCommandWithPublishDependencies(deps, publishcmd.DefaultDependencies())
 }
 
 func NewRootCommandWithPublishDependencies(deps auth.Dependencies, publishDeps publishcmd.Dependencies) *cobra.Command {
