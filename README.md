@@ -54,7 +54,7 @@ https://api.packagemaze.com/v1
 The exchange client posts to:
 
 ```text
-POST /v1/auth/ci-token
+POST /v1/auth/workload-token
 ```
 
 Wrapper actions and orbs can correlate the Tokens they request during one

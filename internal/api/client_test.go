@@ -88,7 +88,7 @@ func TestClientExchangeCISendsRequestAndParsesResponse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExchangeCI returned error: %v", err)
 	}
-	if gotPath != "/v1/auth/ci-token" {
+	if gotPath != "/v1/auth/workload-token" {
 		t.Fatalf("path = %q", gotPath)
 	}
 	if gotRequest.OIDCToken != "oidc-secret" {
@@ -390,7 +390,7 @@ func (fn roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error)
 
 func loadCITokenContractFixture(t *testing.T) ciTokenContractFixture {
 	t.Helper()
-	path := filepath.Join("..", "..", "testdata", "contracts", "ci-token-exchange.json")
+	path := filepath.Join("..", "..", "testdata", "contracts", "workload-token-exchange.json")
 	content, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read CI token contract fixture: %v", err)

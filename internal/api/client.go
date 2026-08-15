@@ -113,7 +113,7 @@ func NewClient(apiURL string, httpClient *http.Client) *Client {
 }
 
 func (c *Client) ExchangeCI(ctx context.Context, request CITokenRequest) (CITokenResponse, error) {
-	endpoint, err := joinEndpoint(c.apiURL, "auth/ci-token")
+	endpoint, err := joinEndpoint(c.apiURL, "auth/workload-token")
 	if err != nil {
 		return CITokenResponse{}, err
 	}

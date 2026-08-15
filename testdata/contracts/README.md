@@ -1,6 +1,6 @@
 # PackageMaze API contract fixtures
 
-`ci-token-exchange.json` mirrors the Worker-owned `POST /v1/auth/ci-token`
+`workload-token-exchange.json` mirrors the Worker-owned `POST /v1/auth/workload-token`
 boundary in the PackageMaze repository:
 
 - request parsing and response construction in
