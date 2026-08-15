@@ -57,7 +57,7 @@ items below are deliberately addressed.
   and explicit legacy client metadata is not treated as Build evidence.
 - [x] Exchange responses expose the server-derived `build_number` and canonical
   `build_url` in machine output without changing token-only stdout.
-- [x] The API Domain exposes `POST /v1/auth/ci-token` with the same names used
+- [x] The API Domain exposes `POST /v1/auth/workload-token` with the same names used
   by CLI and future MCP capabilities.
 - [ ] CI provider trust rules are testable with GitHub Actions, GitLab CI/CD,
   CircleCI, and manual token input.

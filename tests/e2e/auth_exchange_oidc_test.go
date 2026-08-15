@@ -40,8 +40,8 @@ func TestExchangeOIDCAgainstLocalBackendAPI(t *testing.T) {
 			recordBackendError(writer, "method = %s, want POST", request.Method)
 			return
 		}
-		if request.URL.Path != "/v1/auth/ci-token" {
-			recordBackendError(writer, "path = %s, want /v1/auth/ci-token", request.URL.Path)
+		if request.URL.Path != "/v1/auth/workload-token" {
+			recordBackendError(writer, "path = %s, want /v1/auth/workload-token", request.URL.Path)
 			return
 		}
 		if request.Header.Get("Content-Type") != "application/json" {
@@ -187,8 +187,8 @@ func TestExchangeOIDCGitHubOutputAgainstLocalBackendAPI(t *testing.T) {
 			recordBackendError(writer, "method = %s, want POST", request.Method)
 			return
 		}
-		if request.URL.Path != "/v1/auth/ci-token" {
-			recordBackendError(writer, "path = %s, want /v1/auth/ci-token", request.URL.Path)
+		if request.URL.Path != "/v1/auth/workload-token" {
+			recordBackendError(writer, "path = %s, want /v1/auth/workload-token", request.URL.Path)
 			return
 		}
 
@@ -339,7 +339,7 @@ func packageMazeCLIDir(t *testing.T) string {
 
 func loadCITokenContractFixture(t *testing.T) ciTokenContractFixture {
 	t.Helper()
-	content, err := os.ReadFile(filepath.Join(packageMazeCLIDir(t), "testdata", "contracts", "ci-token-exchange.json"))
+	content, err := os.ReadFile(filepath.Join(packageMazeCLIDir(t), "testdata", "contracts", "workload-token-exchange.json"))
 	if err != nil {
 		t.Fatalf("read CI token contract fixture: %v", err)
 	}
