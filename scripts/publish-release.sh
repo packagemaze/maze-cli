@@ -2,8 +2,8 @@
 
 set -euo pipefail
 
-: "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
-: "${GITHUB_SHA:?GITHUB_SHA is required}"
+: "${RELEASE_REPOSITORY:?RELEASE_REPOSITORY is required}"
+: "${RELEASE_COMMIT:?RELEASE_COMMIT is required}"
 : "${RELEASE_TAG:?RELEASE_TAG is required}"
 : "${VERSION:?VERSION is required}"
 
@@ -22,6 +22,12 @@ if [[ ${#asset_paths[@]} -eq 0 ]]; then
   exit 1
 fi
 
+if command -v sha256sum >/dev/null 2>&1; then
+  sha256_tool=(sha256sum)
+else
+  sha256_tool=(shasum -a 256)
+fi
+
 notes_file="$(mktemp)"
 release_json="$(mktemp)"
 release_error="$(mktemp)"
@@ -36,14 +42,13 @@ Assets:
 - maze_linux_amd64.tar.gz
 - maze_linux_arm64.tar.gz
 - maze_darwin_arm64.tar.gz
+- maze_windows_amd64.zip
 - maze_checksums.txt
-
-Windows binaries are intentionally deferred.
 EOF
 
 set +e
 gh release view "$RELEASE_TAG" \
-  --repo "$GITHUB_REPOSITORY" \
+  --repo "$RELEASE_REPOSITORY" \
   --json isDraft,isImmutable,targetCommitish,tagName,assets \
   >"$release_json" 2>"$release_error"
 release_view_status=$?
@@ -52,10 +57,10 @@ set -e
 if [[ $release_view_status -ne 0 ]]; then
   if grep -Fq 'release not found' "$release_error"; then
     gh release create "$RELEASE_TAG" "${asset_paths[@]}" \
-      --target "$GITHUB_SHA" \
+      --target "$RELEASE_COMMIT" \
       --title "maze ${VERSION}" \
       --notes-file "$notes_file" \
-      --repo "$GITHUB_REPOSITORY"
+      --repo "$RELEASE_REPOSITORY"
     exit 0
   fi
 
@@ -70,14 +75,14 @@ is_immutable="$(jq -r '.isImmutable' "$release_json")"
 if [[ "$is_draft" == "true" ]]; then
   gh release upload "$RELEASE_TAG" "${asset_paths[@]}" \
     --clobber \
-    --repo "$GITHUB_REPOSITORY"
+    --repo "$RELEASE_REPOSITORY"
   exit 0
 fi
 
 if [[ "$is_immutable" != "true" ]]; then
   gh release upload "$RELEASE_TAG" "${asset_paths[@]}" \
     --clobber \
-    --repo "$GITHUB_REPOSITORY"
+    --repo "$RELEASE_REPOSITORY"
   exit 0
 fi
 
@@ -88,22 +93,22 @@ if [[ "$published_tag" != "$RELEASE_TAG" ]]; then
     "$RELEASE_TAG" "${published_tag:-<missing>}" >&2
   exit 1
 fi
-if [[ "$release_target" != "$GITHUB_SHA" ]]; then
+if [[ "$release_target" != "$RELEASE_COMMIT" ]]; then
   printf 'immutable release target mismatch for %s: expected %s, found %s\n' \
-    "$RELEASE_TAG" "$GITHUB_SHA" "${release_target:-<missing>}" >&2
+    "$RELEASE_TAG" "$RELEASE_COMMIT" "${release_target:-<missing>}" >&2
   exit 1
 fi
 
 if ! tag_target="$(gh api \
-  "repos/${GITHUB_REPOSITORY}/commits/${RELEASE_TAG}" \
+  "repos/${RELEASE_REPOSITORY}/commits/${RELEASE_TAG}" \
   --jq '.sha')"; then
   printf 'maze release could not resolve the remote tag target for %s\n' \
     "$RELEASE_TAG" >&2
   exit 1
 fi
-if [[ "$tag_target" != "$GITHUB_SHA" ]]; then
+if [[ "$tag_target" != "$RELEASE_COMMIT" ]]; then
   printf 'immutable release tag target mismatch for %s: expected %s, found %s\n' \
-    "$RELEASE_TAG" "$GITHUB_SHA" "${tag_target:-<missing>}" >&2
+    "$RELEASE_TAG" "$RELEASE_COMMIT" "${tag_target:-<missing>}" >&2
   exit 1
 fi
 
@@ -121,7 +126,7 @@ fi
 
 for path in "${asset_paths[@]}"; do
   name="$(basename "$path")"
-  expected_digest="sha256:$(shasum -a 256 "$path" | awk '{print $1}')"
+  expected_digest="sha256:$("${sha256_tool[@]}" "$path" | awk '{print $1}')"
   published_digest="$(jq -r --arg name "$name" \
     '.assets[] | select(.name == $name) | .digest // empty' \
     "$release_json")"
@@ -133,4 +138,4 @@ for path in "${asset_paths[@]}"; do
 done
 
 printf 'Verified immutable release %s at %s with %d unchanged assets.\n' \
-  "$RELEASE_TAG" "$GITHUB_SHA" "${#asset_paths[@]}"
+  "$RELEASE_TAG" "$RELEASE_COMMIT" "${#asset_paths[@]}"

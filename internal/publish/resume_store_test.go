@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -34,7 +35,10 @@ func TestFilePublicationResumeStoreCreatesAdoptsAndProtectsOneRecord(t *testing.
 	if err != nil {
 		t.Fatalf("stat record: %v", err)
 	}
-	if directoryInfo.Mode().Perm() != 0o700 || fileInfo.Mode().Perm() != 0o600 {
+	// Windows expresses file protection through ACLs, not POSIX permission
+	// bits, so the exact 0700/0600 modes are only observable on Unix.
+	if runtime.GOOS != "windows" &&
+		(directoryInfo.Mode().Perm() != 0o700 || fileInfo.Mode().Perm() != 0o600) {
 		t.Fatalf("permissions = directory %o, file %o", directoryInfo.Mode().Perm(), fileInfo.Mode().Perm())
 	}
 }

@@ -1,8 +1,8 @@
 # PackageMaze CLI
 
 `maze` is the PackageMaze command line interface. This repository contains the
-public CLI source, tests, and release workflow that publishes signed release
-assets for `packagemaze/setup-maze`.
+public CLI source, tests, and the CircleCI release pipeline that publishes
+checksummed release assets for `packagemaze/setup-maze`.
 
 The first implemented command is:
 
@@ -33,6 +33,9 @@ The built binary is written to:
 ```sh
 bin/maze
 ```
+
+Windows is an officially supported target: the same commands work there with a
+`bin\maze.exe` build output, and `go test ./...` must pass on Windows.
 
 Useful development commands:
 
@@ -284,6 +287,45 @@ printf '%s' "$OIDC_TOKEN" | maze auth exchange-oidc \
 - `github-output` writes to `$GITHUB_OUTPUT` and emits an `add-mask` workflow
   command for the PackageMaze Token.
 - Tokens are not written to project files or persistent config.
+
+## Repository CI And Releases
+
+All builds for this repository run on CircleCI from
+[`.circleci/config.yml`](.circleci/config.yml). Every branch push runs:
+
+- `lint-and-test-linux`: `gofmt`, `go vet` (including a `GOOS=windows` vet
+  pass), `go test ./...`, and a Linux build.
+- `test-windows`: `go test ./...` plus a build and `maze version` smoke test on
+  a native Windows executor.
+- `build-release-assets`: `scripts/build-release-assets.sh` cross-compiles
+  every official target and writes SHA-256 checksums.
+
+The official release assets are:
+
+- `maze_linux_amd64.tar.gz`
+- `maze_linux_arm64.tar.gz`
+- `maze_darwin_arm64.tar.gz`
+- `maze_windows_amd64.zip` (contains `maze.exe`)
+- `maze_checksums.txt`
+
+Pushing a `v*` tag runs the same jobs and then `publish-github-release`, which
+executes `scripts/publish-release.sh` to create the GitHub release for the tag,
+resume a draft, or verify an immutable rerun without mutating assets.
+Publication is gated on the Linux and Windows test jobs.
+
+CircleCI project requirements:
+
+- `packagemaze/maze-cli` is set up as a project in the PackageMaze CircleCI
+  organization; the workflow's `v*` tag filters make tag pushes build without
+  extra project settings.
+- A `maze-cli-release` context provides `GH_TOKEN`, a GitHub credential with
+  `contents: write` on this repository. No other secrets are required.
+
+The retired GitHub Actions release workflow also attached GitHub build
+provenance attestations. CircleCI cannot produce those GitHub-native
+attestations, so releases currently ship with `maze_checksums.txt` only; a
+provenance replacement remains open in
+[`docs/production-readiness.md`](docs/production-readiness.md).
 
 ## Production Readiness
 
