@@ -1,8 +1,9 @@
 # PackageMaze CLI
 
 `maze` is the PackageMaze command line interface. This repository contains the
-public CLI source, tests, and the CircleCI release pipeline that publishes
-checksummed release assets for `packagemaze/setup-maze`.
+public CLI source, tests, and the GitHub Actions release pipeline that
+publishes checksummed, provenance-attested release assets for
+`packagemaze/setup-maze`.
 
 The first implemented command is:
 
@@ -34,8 +35,9 @@ The built binary is written to:
 bin/maze
 ```
 
-Windows is an officially supported target: the same commands work there with a
-`bin\maze.exe` build output, and `go test ./...` must pass on Windows.
+Linux, macOS, and Windows are officially supported targets: the same commands
+work on each platform (with a `bin\maze.exe` build output on Windows), and
+`go test ./...` must pass on all three.
 
 Useful development commands:
 
@@ -290,17 +292,24 @@ printf '%s' "$OIDC_TOKEN" | maze auth exchange-oidc \
 
 ## Repository CI And Releases
 
-All builds for this repository run on CircleCI from
-[`.circleci/config.yml`](.circleci/config.yml). Every branch push runs:
+All builds for this repository run on GitHub Actions using Blacksmith runners.
 
-- `lint-and-test-linux`: `gofmt`, `go vet` (including a `GOOS=windows` vet
-  pass), `go test ./...`, and a Linux build.
-- `test-windows`: `go test ./...` plus a build and `maze version` smoke test on
-  a native Windows executor.
-- `build-release-assets`: `scripts/build-release-assets.sh` cross-compiles
-  every official target and writes SHA-256 checksums.
+[`.github/workflows/test.yml`](.github/workflows/test.yml) runs on every pull
+request and push to `main` with a native matrix over the officially supported
+platforms:
 
-The official release assets are:
+- Linux (`blacksmith-4vcpu-ubuntu-2404`): `gofmt`, `go vet`, `go test ./...`,
+  and a build plus `maze version` smoke test.
+- macOS (`blacksmith-6vcpu-macos-15`, Apple Silicon): `go vet`,
+  `go test ./...`, build, and smoke test.
+- Windows (`blacksmith-4vcpu-windows-2025`): `go vet`, `go test ./...`, build,
+  and smoke test. Tests that drive the Linux-only bash release pipeline skip
+  themselves on Windows.
+
+[`.github/workflows/release.yml`](.github/workflows/release.yml) reuses that
+test matrix as a gate, then `scripts/build-release-assets.sh` cross-compiles
+every official target and writes SHA-256 checksums. The official release
+assets are:
 
 - `maze_linux_amd64.tar.gz`
 - `maze_linux_arm64.tar.gz`
@@ -308,24 +317,14 @@ The official release assets are:
 - `maze_windows_amd64.zip` (contains `maze.exe`)
 - `maze_checksums.txt`
 
-Pushing a `v*` tag runs the same jobs and then `publish-github-release`, which
-executes `scripts/publish-release.sh` to create the GitHub release for the tag,
-resume a draft, or verify an immutable rerun without mutating assets.
-Publication is gated on the Linux and Windows test jobs.
+Pushing a `v*` tag runs the same test and build jobs, attaches GitHub build
+provenance attestations for the checksummed assets, and then runs
+`scripts/publish-release.sh` with the workflow's own `GITHUB_TOKEN` to create
+the GitHub release for the tag, resume a draft, or verify an immutable rerun
+without mutating assets.
 
-CircleCI project requirements:
-
-- `packagemaze/maze-cli` is set up as a project in the PackageMaze CircleCI
-  organization; the workflow's `v*` tag filters make tag pushes build without
-  extra project settings.
-- A `maze-cli-release` context provides `GH_TOKEN`, a GitHub credential with
-  `contents: write` on this repository. No other secrets are required.
-
-The retired GitHub Actions release workflow also attached GitHub build
-provenance attestations. CircleCI cannot produce those GitHub-native
-attestations, so releases currently ship with `maze_checksums.txt` only; a
-provenance replacement remains open in
-[`docs/production-readiness.md`](docs/production-readiness.md).
+The only repository-side CI requirement is the Blacksmith GitHub app; the
+release workflow stores no long-lived credentials.
 
 ## Production Readiness
 

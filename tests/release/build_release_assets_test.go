@@ -117,7 +117,7 @@ func runBuildReleaseAssets(t *testing.T, releaseTag string) string {
 func repositoryRoot(t *testing.T) string {
 	t.Helper()
 	if runtime.GOOS == "windows" {
-		t.Skip("release assets are built by a bash pipeline on Linux CircleCI executors")
+		t.Skip("release assets are built by a bash pipeline on Linux release runners")
 	}
 	root, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {

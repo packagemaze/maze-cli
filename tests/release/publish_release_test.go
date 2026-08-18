@@ -186,7 +186,7 @@ func TestPublishReleaseImmutableRerunFailsClosed(t *testing.T) {
 func runPublishRelease(t *testing.T, options runOptions) runResult {
 	t.Helper()
 	if runtime.GOOS == "windows" {
-		t.Skip("release publication is a bash pipeline that runs on Linux CircleCI executors")
+		t.Skip("release publication is a bash pipeline that runs on Linux release runners")
 	}
 
 	root, err := filepath.Abs(filepath.Join("..", ".."))

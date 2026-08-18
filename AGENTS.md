@@ -4,9 +4,10 @@
 - Keep this repository limited to CLI source, tests, docs, and release
   automation.
 - Use `go test ./...`, `go vet ./...`, `gofmt`, and `go build ./cmd/maze`.
-- CI runs on CircleCI from `.circleci/config.yml`. Windows is an officially
-  supported target: keep `go test ./...` passing on Windows, and skip only
-  tests that drive the Linux-only bash release pipeline.
+- CI runs on GitHub Actions using Blacksmith runners from
+  `.github/workflows/`. Linux, macOS, and Windows are officially tested
+  targets: keep `go test ./...` passing on all three, and skip only tests
+  that drive the Linux-only bash release pipeline.
 - Release automation lives in `scripts/` and publishes GitHub release assets
   for linux/amd64, linux/arm64, darwin/arm64, and windows/amd64.
 - Keep command constructors dependency-injected so tests never need real
