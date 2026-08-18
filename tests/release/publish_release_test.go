@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -105,7 +106,7 @@ func TestPublishReleaseVerifiesMatchingImmutableRerunWithoutMutation(t *testing.
 	}
 	if !strings.Contains(
 		result.output,
-		"Verified immutable release v0.0.5 at "+candidateSHA+" with 4 unchanged assets.",
+		"Verified immutable release v0.0.5 at "+candidateSHA+" with 5 unchanged assets.",
 	) {
 		t.Fatalf("output = %q", result.output)
 	}
@@ -184,6 +185,9 @@ func TestPublishReleaseImmutableRerunFailsClosed(t *testing.T) {
 
 func runPublishRelease(t *testing.T, options runOptions) runResult {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("release publication is a bash pipeline that runs on Linux release runners")
+	}
 
 	root, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
@@ -212,7 +216,7 @@ func runPublishRelease(t *testing.T, options runOptions) runResult {
 
 	command := exec.Command(
 		"bash",
-		filepath.Join(root, ".github", "scripts", "publish-release.sh"),
+		filepath.Join(root, "scripts", "publish-release.sh"),
 	)
 	command.Env = append(
 		os.Environ(),
@@ -222,8 +226,8 @@ func runPublishRelease(t *testing.T, options runOptions) runResult {
 		fmt.Sprintf("FAKE_GH_RELEASE_EXISTS=%t", options.releaseExists),
 		"FAKE_GH_RELEASE_JSON="+string(releaseJSON),
 		"FAKE_GH_TAG_SHA="+options.tagSHA,
-		"GITHUB_REPOSITORY=packagemaze/maze-cli",
-		"GITHUB_SHA="+candidateSHA,
+		"RELEASE_REPOSITORY=packagemaze/maze-cli",
+		"RELEASE_COMMIT="+candidateSHA,
 		"RELEASE_TAG=v0.0.5",
 		"VERSION=0.0.5",
 	)
@@ -295,6 +299,7 @@ func releaseFiles() []struct {
 		{name: "maze_darwin_arm64.tar.gz", content: []byte("darwin arm64 archive")},
 		{name: "maze_linux_amd64.tar.gz", content: []byte("linux amd64 archive")},
 		{name: "maze_linux_arm64.tar.gz", content: []byte("linux arm64 archive")},
+		{name: "maze_windows_amd64.zip", content: []byte("windows amd64 archive")},
 	}
 }
 

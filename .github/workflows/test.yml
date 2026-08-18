@@ -4,15 +4,35 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_call:
 
 permissions:
   contents: read
 
 jobs:
   test:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    name: test (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux
+            runner: blacksmith-4vcpu-ubuntu-2404
+          - platform: macos
+            runner: blacksmith-6vcpu-macos-15
+          - platform: windows
+            runner: blacksmith-4vcpu-windows-2025
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
 
     steps:
+      - name: Keep LF line endings on Windows
+        if: matrix.platform == 'windows'
+        run: git config --global core.autocrlf false
+
       - uses: actions/checkout@v7.0.0
 
       - uses: actions/setup-go@v6
@@ -21,6 +41,7 @@ jobs:
           cache: false
 
       - name: Format
+        if: matrix.platform == 'linux'
         run: test -z "$(gofmt -l $(find . -name '*.go' -not -path './bin/*'))"
 
       - name: Vet
@@ -29,5 +50,11 @@ jobs:
       - name: Test
         run: go test ./...
 
-      - name: Build
-        run: go build -o bin/maze ./cmd/maze
+      - name: Build and smoke test
+        run: |
+          ext=""
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            ext=".exe"
+          fi
+          go build -o "bin/maze${ext}" ./cmd/maze
+          "./bin/maze${ext}" version

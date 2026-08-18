@@ -4,7 +4,8 @@ on:
   pull_request:
     paths:
       - .github/workflows/release.yml
-      - .github/scripts/**
+      - .github/workflows/test.yml
+      - scripts/**
       - cmd/**
       - docs/**
       - internal/**
@@ -19,7 +20,13 @@ permissions:
   contents: read
 
 jobs:
+  test:
+    uses: ./.github/workflows/test.yml
+    permissions:
+      contents: read
+
   build:
+    needs: test
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 10
     outputs:
@@ -51,29 +58,11 @@ jobs:
           printf 'release_tag=%s\n' "$release_tag" >> "$GITHUB_OUTPUT"
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
 
-      - name: Test CLI
-        run: go test ./...
-
-      - name: Build archives
+      - name: Build release archives
         env:
-          CLI_VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          set -euo pipefail
-          mkdir -p dist
-          build_date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          ldflags="-s -w -X github.com/packagemaze/maze-cli/internal/version.Version=${CLI_VERSION} -X github.com/packagemaze/maze-cli/internal/version.Commit=${GITHUB_SHA} -X github.com/packagemaze/maze-cli/internal/version.Date=${build_date}"
-
-          for target in linux/amd64 linux/arm64 darwin/arm64; do
-            goos="${target%/*}"
-            goarch="${target#*/}"
-            platform="${goos}_${goarch}"
-            work_dir="$(mktemp -d)"
-            CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build -trimpath -ldflags "$ldflags" -o "${work_dir}/maze" ./cmd/maze
-            tar -C "$work_dir" -czf "dist/maze_${platform}.tar.gz" maze
-            rm -rf "$work_dir"
-          done
-
-          (cd dist && shasum -a 256 maze_*.tar.gz > maze_checksums.txt)
+          RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: bash scripts/build-release-assets.sh
 
       - uses: actions/upload-artifact@v7.0.1
         with:
@@ -106,6 +95,8 @@ jobs:
       - name: Publish release assets
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_COMMIT: ${{ github.sha }}
           RELEASE_TAG: ${{ needs.build.outputs.release_tag }}
           VERSION: ${{ needs.build.outputs.version }}
-        run: bash .github/scripts/publish-release.sh
+        run: bash scripts/publish-release.sh
