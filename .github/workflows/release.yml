@@ -15,6 +15,12 @@ on:
   push:
     tags:
       - v*
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag to cut from main (v*); the tag is created by the release itself"
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -43,9 +49,17 @@ jobs:
 
       - id: version
         name: Resolve release version
+        env:
+          DISPATCH_RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+              printf 'maze CLI dispatch releases must run from main, not %s\n' "$GITHUB_REF" >&2
+              exit 1
+            fi
+            release_tag="$DISPATCH_RELEASE_TAG"
+          elif [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             release_tag="$GITHUB_REF_NAME"
           else
             release_tag="v0.0.0-dev"
@@ -54,6 +68,16 @@ jobs:
             v*) ;;
             *) printf 'maze CLI release tags must use v*: %s\n' "$release_tag" >&2; exit 1 ;;
           esac
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            peeled="$(git ls-remote origin "refs/tags/${release_tag}^{}" | cut -f1)"
+            plain="$(git ls-remote origin "refs/tags/${release_tag}" | cut -f1)"
+            existing="${peeled:-$plain}"
+            if [ -n "$existing" ] && [ "$existing" != "$GITHUB_SHA" ]; then
+              printf 'tag %s already exists at %s, not the dispatched commit %s\n' \
+                "$release_tag" "$existing" "$GITHUB_SHA" >&2
+              exit 1
+            fi
+          fi
           version="${release_tag#v}"
           printf 'release_tag=%s\n' "$release_tag" >> "$GITHUB_OUTPUT"
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
@@ -71,7 +95,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    if: ${{ github.ref_type == 'tag' }}
+    if: ${{ github.ref_type == 'tag' || github.event_name == 'workflow_dispatch' }}
     needs: build
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 10
