@@ -323,6 +323,11 @@ provenance attestations for the checksummed assets, and then runs
 the GitHub release for the tag, resume a draft, or verify an immutable rerun
 without mutating assets.
 
+A release can also be cut without pushing a tag: run the Release workflow
+manually from `main` with a `v*` `release_tag` input. The dispatched run fails
+if the tag already exists on a different commit; otherwise publishing the
+GitHub release creates the tag on the dispatched `main` commit.
+
 The only repository-side CI requirement is the Blacksmith GitHub app; the
 release workflow stores no long-lived credentials.
 
