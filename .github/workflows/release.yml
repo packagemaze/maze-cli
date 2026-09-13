@@ -89,10 +89,12 @@ jobs:
         run: bash scripts/build-release-assets.sh
 
       - uses: actions/upload-artifact@v7.0.1
+        if: ${{ github.ref_type == 'tag' || github.event_name == 'workflow_dispatch' }}
         with:
           name: maze-cli-release-assets
           path: dist/*
           if-no-files-found: error
+          retention-days: 1
 
   release:
     if: ${{ github.ref_type == 'tag' || github.event_name == 'workflow_dispatch' }}
