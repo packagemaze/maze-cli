@@ -268,7 +268,7 @@ permissions:
 steps:
   - uses: actions/checkout@v4
   - id: packagemaze
-    uses: packagemaze/setup-maze@v0.0.4
+    uses: packagemaze/setup-maze@v0.0.5
     with:
       feed: <organization>/<feed>
       purpose: install
