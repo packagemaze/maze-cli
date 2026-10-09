@@ -1,9 +1,19 @@
 # PackageMaze CLI
 
+[PackageMaze](https://www.packagemaze.com/) hosts private npm and PyPI Feeds
+for an Organization. A Feed is one registry URL under pkg.packagemaze.com that
+people, CI, and coding agents install through, and every delivered version is
+on record.
+
 `maze` is the PackageMaze command line interface. This repository contains the
 public CLI source, tests, and the GitHub Actions release pipeline that
 publishes checksummed, provenance-attested release assets for
-`packagemaze/setup-maze`.
+[`packagemaze/setup-maze`](https://github.com/packagemaze/setup-maze).
+
+Coding agents start with the
+[Agent quickstart](https://www.packagemaze.com/docs/agent-quickstart/);
+[Connect your agent](https://www.packagemaze.com/docs/connect-your-agent/)
+covers the MCP endpoint, `https://api.packagemaze.com/mcp`.
 
 The implemented commands are:
 
@@ -258,7 +268,7 @@ permissions:
 steps:
   - uses: actions/checkout@v4
   - id: packagemaze
-    uses: packagemaze/setup-maze@v0.0.3
+    uses: packagemaze/setup-maze@v0.0.4
     with:
       feed: <organization>/<feed>
       purpose: install
