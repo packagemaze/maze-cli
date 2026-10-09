@@ -7,6 +7,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/packagemaze/maze-cli/internal/auth"
+	"github.com/packagemaze/maze-cli/internal/doctor"
+	"github.com/packagemaze/maze-cli/internal/endpoint"
 	"github.com/packagemaze/maze-cli/internal/output"
 	publishcmd "github.com/packagemaze/maze-cli/internal/publish"
 	"github.com/packagemaze/maze-cli/internal/version"
@@ -21,6 +23,10 @@ func NewRootCommand(deps auth.Dependencies) *cobra.Command {
 }
 
 func NewRootCommandWithPublishDependencies(deps auth.Dependencies, publishDeps publishcmd.Dependencies) *cobra.Command {
+	return NewRootCommandWithDependencies(deps, publishDeps, doctor.Dependencies{})
+}
+
+func NewRootCommandWithDependencies(deps auth.Dependencies, publishDeps publishcmd.Dependencies, doctorDeps doctor.Dependencies) *cobra.Command {
 	root := &cobra.Command{
 		Use:           "maze",
 		Short:         "PackageMaze command line interface",
@@ -30,6 +36,7 @@ func NewRootCommandWithPublishDependencies(deps auth.Dependencies, publishDeps p
 	root.AddCommand(newVersionCommand())
 	root.AddCommand(newAuthCommand(deps))
 	root.AddCommand(newPublishCommand(deps, publishDeps))
+	root.AddCommand(newDoctorCommand(deps, doctorDeps))
 	return root
 }
 
@@ -149,7 +156,7 @@ func newPublishCommand(authDeps auth.Dependencies, publishDeps publishcmd.Depend
 		},
 	}
 	flags := command.Flags()
-	flags.StringVar(&config.PackageClientURL, "package-client-url", "", "PackageMaze Package Client Domain base URL (default: MAZE_PACKAGE_CLIENT_URL, else https://pkg.packagemaze.com)")
+	flags.StringVar(&config.PackageClientURL, "package-client-url", "", endpoint.PackageClientURLFlagHelp)
 	flags.StringVar(&config.Feed, "feed", "", "PackageMaze Feed in org/feed form")
 	flags.StringVar(&config.TokenEnv, "token-env", publishcmd.DefaultTokenEnv, "Environment variable containing a PackageMaze Token")
 	flags.StringVar(&config.TokenFile, "token-file", "", "File containing a PackageMaze Token")
@@ -163,5 +170,49 @@ func newPublishCommand(authDeps auth.Dependencies, publishDeps publishcmd.Depend
 	flags.BoolVar(&config.Verbose, "verbose", false, "Print non-secret diagnostics to stderr")
 	flags.BoolVar(&config.AllowInsecureLocalhost, "allow-insecure-localhost", false, "Allow http URLs only for localhost development")
 	_ = command.MarkFlagRequired("feed")
+	return command
+}
+
+func newDoctorCommand(authDeps auth.Dependencies, doctorDeps doctor.Dependencies) *cobra.Command {
+	var config doctor.Config
+	command := &cobra.Command{
+		Use:   "doctor",
+		Short: "Diagnose a repository's PackageMaze setup without changing it",
+		Long: "Read the repository's package-client configuration (.npmrc, .yarnrc.yml, bunfig.toml, pnpm-workspace.yaml, package.json, requirements files, pip.conf, pyproject.toml, uv.toml, Pipfile, and GitHub workflows using packagemaze/setup-maze), " +
+			"say which PackageMaze Feed it points at or that none does, and check each setting's shape against the Feed's URLs.\n\n" +
+			"With MAZE_TOKEN set, make one read-only request per Feed to prove the Token is accepted for reads. " +
+			"The command writes nothing, prints no Token value, and contacts only the PackageMaze Package Client Domain. It exits non-zero only when a check failed.",
+		Example: "  maze doctor\n" +
+			"  maze doctor --format json\n" +
+			"  maze doctor --dir packages/app --feed your-org/your-feed",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			runDeps := doctorDeps
+			if runDeps.Env == nil {
+				runDeps.Env = authDeps.Env
+			}
+			if runDeps.HTTPClient == nil {
+				runDeps.HTTPClient = authDeps.HTTPClient
+			}
+			report, resolved, err := doctor.Run(cmd.Context(), config, runDeps)
+			if err != nil {
+				return err
+			}
+			if err := doctor.Write(report, resolved.FormatValue, cmd.OutOrStdout(), resolved.Token); err != nil {
+				return err
+			}
+			return report.FailureError()
+		},
+	}
+	flags := command.Flags()
+	flags.StringVar(&config.Dir, "dir", ".", "Repository directory to diagnose; its parents up to the repository root are read too")
+	flags.StringVar(&config.Feed, "feed", "", "Diagnose this PackageMaze Feed (org/feed) even when no file names it")
+	flags.StringVar(&config.Format, "format", string(doctor.FormatMarkdown), "Output format: markdown or json")
+	flags.BoolVar(&config.JSONAlias, "json", false, "Alias for --format json")
+	flags.StringVar(&config.TokenEnv, "token-env", endpoint.DefaultTokenEnv, "Environment variable holding the PackageMaze Token to test; its value is never printed")
+	flags.StringVar(&config.PackageClientURL, "package-client-url", "", endpoint.PackageClientURLFlagHelp)
+	flags.BoolVar(&config.Offline, "offline", false, "Skip the live Token check; read files only")
+	flags.DurationVar(&config.Timeout, "timeout", 15*time.Second, "HTTP timeout for the live Token check")
+	flags.BoolVar(&config.AllowInsecureLocalhost, "allow-insecure-localhost", false, "Allow http URLs only for localhost development")
 	return command
 }

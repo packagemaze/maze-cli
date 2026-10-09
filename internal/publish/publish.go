@@ -16,25 +16,23 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/packagemaze/maze-cli/internal/ci"
+	mazeendpoint "github.com/packagemaze/maze-cli/internal/endpoint"
 	"github.com/packagemaze/maze-cli/internal/version"
 )
 
 const (
-	DefaultPackageClientURL   = "https://pkg.packagemaze.com"
-	DefaultTokenEnv           = "MAZE_TOKEN"
+	DefaultPackageClientURL   = mazeendpoint.DefaultPackageClientURL
+	DefaultTokenEnv           = mazeendpoint.DefaultTokenEnv
 	maxMultipartParts         = 10_000
 	maxMultipartPartSizeBytes = 64 * 1024 * 1024
 	maxConcurrentArtifacts    = 2
 	minMultipartPartSizeBytes = 5 * 1024 * 1024
 )
-
-var feedPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
 type Config struct {
 	AllowInsecureLocalhost bool
@@ -543,7 +541,7 @@ func Resolve(config Config, deps Dependencies) (ResolvedConfig, error) {
 	if env == nil {
 		env = ci.DefaultLookupEnv
 	}
-	config.PackageClientURL = strings.TrimRight(firstNonEmpty(config.PackageClientURL, envValue(env, "MAZE_PACKAGE_CLIENT_URL"), DefaultPackageClientURL), "/")
+	config.PackageClientURL = mazeendpoint.ResolvePackageClientURL(config.PackageClientURL, env)
 	config.TokenEnv = firstNonEmpty(config.TokenEnv, DefaultTokenEnv)
 	if config.Timeout == 0 {
 		config.Timeout = 30 * time.Second
@@ -561,10 +559,10 @@ func Resolve(config Config, deps Dependencies) (ResolvedConfig, error) {
 	if err != nil {
 		return ResolvedConfig{}, err
 	}
-	if !feedPattern.MatchString(strings.TrimSpace(config.Feed)) {
+	if _, _, ok := mazeendpoint.SplitFeedSlug(config.Feed); !ok {
 		return ResolvedConfig{}, fmt.Errorf("--feed must be in org/feed form")
 	}
-	if err := validateURL("package-client-url", config.PackageClientURL, config.AllowInsecureLocalhost); err != nil {
+	if err := mazeendpoint.ValidateURL("package-client-url", config.PackageClientURL, config.AllowInsecureLocalhost); err != nil {
 		return ResolvedConfig{}, err
 	}
 	if config.Timeout <= 0 {
@@ -770,7 +768,7 @@ func validatePackageMazePlanURL(label string, config ResolvedConfig, value strin
 	if strings.TrimSpace(value) == "" {
 		return fmt.Errorf("PackageMaze publish plan %s URL is missing", label)
 	}
-	if err := validateURL("publish-plan-"+label+"-url", value, config.AllowInsecureLocalhost); err != nil {
+	if err := mazeendpoint.ValidateURL("publish-plan-"+label+"-url", value, config.AllowInsecureLocalhost); err != nil {
 		return err
 	}
 	base, err := url.Parse(config.PackageClientURL)
@@ -955,29 +953,6 @@ func parseFormat(value string) (Format, error) {
 	}
 }
 
-func validateURL(flag string, value string, allowInsecureLocalhost bool) error {
-	parsed, err := url.Parse(value)
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return fmt.Errorf("--%s must be an absolute URL", flag)
-	}
-	if parsed.Scheme == "https" {
-		return nil
-	}
-	if parsed.Scheme == "http" && allowInsecureLocalhost && isLocalhost(parsed.Hostname()) {
-		return nil
-	}
-	return fmt.Errorf("--%s must use https; use --allow-insecure-localhost only for local http endpoints", flag)
-}
-
-func isLocalhost(host string) bool {
-	normalized := strings.ToLower(strings.TrimSpace(host))
-	if normalized == "localhost" {
-		return true
-	}
-	ip := net.ParseIP(normalized)
-	return ip != nil && ip.IsLoopback()
-}
-
 func envValue(env ci.LookupEnv, key string) string {
 	if value, ok := env(key); ok {
 		return strings.TrimSpace(value)
@@ -1052,7 +1027,7 @@ func retryablePackageMazeRequestError(ctx context.Context, err error) bool {
 }
 
 func (c *HTTPClient) CompleteUpload(ctx context.Context, token string, completion CompletionInstruction, upload UploadResult) error {
-	if err := validateURL("publish-plan-completion-url", completion.URL, c.allowInsecureLocalhost); err != nil {
+	if err := mazeendpoint.ValidateURL("publish-plan-completion-url", completion.URL, c.allowInsecureLocalhost); err != nil {
 		return err
 	}
 	if err := validateSameOriginPlanURL("completion", c.baseURL, completion.URL); err != nil {
@@ -1078,7 +1053,7 @@ func (c *HTTPClient) CompleteUpload(ctx context.Context, token string, completio
 }
 
 func (c *HTTPClient) GetStatus(ctx context.Context, token string, statusURL string) (PublishSessionStatusResponse, error) {
-	if err := validateURL("publish-plan-status-url", statusURL, c.allowInsecureLocalhost); err != nil {
+	if err := mazeendpoint.ValidateURL("publish-plan-status-url", statusURL, c.allowInsecureLocalhost); err != nil {
 		return PublishSessionStatusResponse{}, err
 	}
 	if err := validateSameOriginPlanURL("status", c.baseURL, statusURL); err != nil {
@@ -1116,7 +1091,7 @@ func (c *HTTPClient) publishSessionEndpoint(feed string) (string, error) {
 		return "", fmt.Errorf("--feed must be in org/feed form")
 	}
 	endpoint := c.baseURL + "/" + url.PathEscape(parts[0]) + "/" + url.PathEscape(parts[1]) + "/-/packagemaze/v1/publish-sessions"
-	if err := validateURL("package-client-url", endpoint, c.allowInsecureLocalhost); err != nil {
+	if err := mazeendpoint.ValidateURL("package-client-url", endpoint, c.allowInsecureLocalhost); err != nil {
 		return "", err
 	}
 	return endpoint, nil
