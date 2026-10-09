@@ -22,5 +22,9 @@
 - Do not log raw OIDC tokens or PackageMaze Token Secrets.
 - Keep stdout for requested machine-readable data and stderr for human
   diagnostics.
+- Keep `maze doctor` read-only: it never writes files, never prints a Token
+  value, and contacts only the PackageMaze Package Client Domain. Its check
+  codes reuse Feed Doctor's vocabulary; add a code only when PackageMaze has no
+  name for the fact.
 - Test local and staging workflows with endpoint overrides or dependency
   injection rather than alternate product-visible command modes.

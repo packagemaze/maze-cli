@@ -5,13 +5,15 @@ public CLI source, tests, and the GitHub Actions release pipeline that
 publishes checksummed, provenance-attested release assets for
 `packagemaze/setup-maze`.
 
-The first implemented command is:
+The implemented commands are:
 
 ```sh
+maze doctor
 maze auth exchange-oidc
 maze publish dist/* --feed <organization>/<feed>
 ```
 
+`maze doctor` diagnoses a repository's PackageMaze setup without changing it.
 `maze auth exchange-oidc` exchanges a CI OIDC identity token for a short-lived
 PackageMaze Token. `maze publish` sends local artifact facts to PackageMaze,
 executes the returned backend plan, uploads bytes, and waits for Publish
@@ -187,6 +189,64 @@ Useful flags:
 - `--package <name>` and `--version <version>` as optional backend hints
 - `--wait=false` to return after upload completion
 - `--json` or `--format json` for CI-safe structured output
+
+## Doctor
+
+```sh
+maze doctor
+maze doctor --format json
+maze doctor --dir packages/app --feed <organization>/<feed>
+```
+
+Run `maze doctor` in a repository when an install fails, or before setting
+PackageMaze up. It is for people and for coding agents: the default output is
+Markdown, `--format json` (or `--json`) is the same report as data, and the
+exit code is non-zero only when a check failed.
+
+It reads the committed package-client configuration in the directory and its
+parents up to the repository root: `.npmrc`, `.yarnrc.yml`, `bunfig.toml`,
+`pnpm-workspace.yaml`, `package.json` (`publishConfig`), `requirements*.txt`,
+`pip.conf`, `pyproject.toml` (uv, Poetry, PDM), `uv.toml`, `Pipfile`, and
+`.github/workflows/*.yml` steps that use `packagemaze/setup-maze`. It also reads
+index variables such as `PIP_INDEX_URL` and `NPM_CONFIG_REGISTRY`. From those
+it says which Feed the repository points at, or that none does.
+
+Every check has a stable `code`, a `status` (`pass`, `warning`, `fail`), a
+`summary` of what was observed, and a `remediation` naming the next step. The
+checks are Feed Doctor's vocabulary applied locally:
+
+- the URL shape each client needs: the Feed Base URL with its trailing slash
+  for npm clients, the `/simple/` URL for pip, uv, Poetry, and PDM, the
+  `/legacy/` URL for publishing;
+- PackageMaze as the only index, with no `--extra-index-url`, supplemental
+  Poetry source, non-default uv index, or scope routed elsewhere;
+- committed credentials, including the pnpm case where a committed
+  `${MAZE_TOKEN}` placeholder is ignored;
+- the pnpm registry description, `permissions.id-token: write` next to
+  setup-maze, and workflows minting Tokens for a different Feed;
+- whether `MAZE_TOKEN` (or the variable named with `--token-env`) is set, and
+  exactly what to set and where to get one when it is not.
+
+With a Token set, the command makes one read-only request per configured Feed,
+exactly as that Feed's package client would: `GET <Feed Base URL>-/whoami` with
+the Token as a Bearer credential for npm Feeds, `GET <Feed Base URL>simple/`
+with `__token__` Basic credentials for PyPI Feeds. The answer proves the Token
+is accepted for reads (`read_token_ready`), rejected
+(`read_token_rejected`), or that no Feed answers at that address
+(`feed_not_found`). PackageMaze deliberately does not tell package clients why
+a Token was rejected, and the report says so. `--offline` skips the request.
+
+Security notes specific to `maze doctor`:
+
+- It never writes a file and never prints a Token value. URLs are printed
+  without credentials, and every output passes through redaction.
+- It contacts only the Package Client Domain (`https://pkg.packagemaze.com`,
+  or `--package-client-url` / `MAZE_PACKAGE_CLIENT_URL` for local and staging
+  stacks). A URL on any other host is reported as not PackageMaze and is never
+  requested.
+- It does not read user-level client configuration (`~/.npmrc`, pip or uv
+  credentials, Poetry's auth store); the report lists that under
+  `not_checked`.
 
 ## GitHub Actions
 

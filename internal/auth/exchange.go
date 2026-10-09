@@ -5,9 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"regexp"
 	"strings"
@@ -15,6 +13,7 @@ import (
 
 	"github.com/packagemaze/maze-cli/internal/api"
 	"github.com/packagemaze/maze-cli/internal/ci"
+	"github.com/packagemaze/maze-cli/internal/endpoint"
 	"github.com/packagemaze/maze-cli/internal/output"
 )
 
@@ -26,7 +25,6 @@ const (
 )
 
 var (
-	feedPattern              = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$`)
 	outputNamePattern        = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 	setupInvocationIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$`)
 )
@@ -182,7 +180,7 @@ func Resolve(config Config, deps Dependencies) (ResolvedConfig, error) {
 }
 
 func validateResolved(config ResolvedConfig, env ci.LookupEnv) error {
-	if !feedPattern.MatchString(strings.TrimSpace(config.Feed)) {
+	if _, _, ok := endpoint.SplitFeedSlug(config.Feed); !ok {
 		return fmt.Errorf("--feed must be in org/feed form")
 	}
 	switch strings.TrimSpace(config.Purpose) {
@@ -199,10 +197,10 @@ func validateResolved(config ResolvedConfig, env ci.LookupEnv) error {
 	if config.Timeout <= 0 {
 		return fmt.Errorf("--timeout must be positive")
 	}
-	if err := validateURL("base-url", config.BaseURL, config.AllowInsecureLocalhost); err != nil {
+	if err := endpoint.ValidateURL("base-url", config.BaseURL, config.AllowInsecureLocalhost); err != nil {
 		return err
 	}
-	if err := validateURL("api-url", config.APIURL, config.AllowInsecureLocalhost); err != nil {
+	if err := endpoint.ValidateURL("api-url", config.APIURL, config.AllowInsecureLocalhost); err != nil {
 		return err
 	}
 	if strings.TrimSpace(config.Audience) == "" {
@@ -354,29 +352,6 @@ func hasManualTokenSource(config Config, env ci.LookupEnv) bool {
 		return true
 	}
 	return false
-}
-
-func validateURL(flag string, value string, allowInsecureLocalhost bool) error {
-	parsed, err := url.Parse(value)
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return fmt.Errorf("--%s must be an absolute URL", flag)
-	}
-	if parsed.Scheme == "https" {
-		return nil
-	}
-	if parsed.Scheme == "http" && allowInsecureLocalhost && isLocalhost(parsed.Hostname()) {
-		return nil
-	}
-	return fmt.Errorf("--%s must use https; use --allow-insecure-localhost only for local http endpoints", flag)
-}
-
-func isLocalhost(host string) bool {
-	normalized := strings.ToLower(strings.TrimSpace(host))
-	if normalized == "localhost" {
-		return true
-	}
-	ip := net.ParseIP(normalized)
-	return ip != nil && ip.IsLoopback()
 }
 
 func envValue(env ci.LookupEnv, key string) string {

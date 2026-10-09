@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/packagemaze/maze-cli/internal/api"
 	"github.com/packagemaze/maze-cli/internal/auth"
+	"github.com/packagemaze/maze-cli/internal/doctor"
 	publishcmd "github.com/packagemaze/maze-cli/internal/publish"
 )
 
@@ -225,9 +227,17 @@ func runCommandWithDeps(deps auth.Dependencies, args ...string) (string, string,
 }
 
 func runCommandWithPublishDeps(deps auth.Dependencies, publishDeps publishcmd.Dependencies, args ...string) (string, string, error) {
+	return runRootCommand(deps, publishDeps, doctor.Dependencies{}, args...)
+}
+
+func runCommandWithDoctorDeps(doctorDeps doctor.Dependencies, args ...string) (string, string, error) {
+	return runRootCommand(auth.Dependencies{Env: doctorDeps.Env}, publishcmd.Dependencies{}, doctorDeps, args...)
+}
+
+func runRootCommand(deps auth.Dependencies, publishDeps publishcmd.Dependencies, doctorDeps doctor.Dependencies, args ...string) (string, string, error) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	command := NewRootCommandWithPublishDependencies(deps, publishDeps)
+	command := NewRootCommandWithDependencies(deps, publishDeps, doctorDeps)
 	command.SetOut(&stdout)
 	command.SetErr(&stderr)
 	command.SetArgs(args)
@@ -350,4 +360,73 @@ func publishStatusResponse(create publishcmd.CreatePublishSessionResponse) publi
 		response.Artifacts = append(response.Artifacts, status)
 	}
 	return response
+}
+
+func TestDoctorCommandWritesMarkdownAndExitsNonZeroOnFailingChecks(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "requirements.txt"), []byte("--index-url https://pkg.packagemaze.com/acme/pypi/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	prober := &recordingProber{result: doctor.ProbeResult{Outcome: doctor.ProbeTokenRejected, StatusCode: 401}}
+	stdout, stderr, err := runCommandWithDoctorDeps(
+		doctor.Dependencies{Env: mapLookup(map[string]string{"MAZE_TOKEN": "pm_cli_secret"}), Prober: prober},
+		"doctor", "--dir", dir,
+	)
+	if !errors.Is(err, doctor.ErrChecksFailed) {
+		t.Fatalf("err = %v\nstdout: %s", err, stdout)
+	}
+	if !strings.HasPrefix(stdout, "# maze doctor\n") || !strings.Contains(stdout, "`client_config_wrong_registry`") || !strings.Contains(stdout, "`read_token_rejected`") {
+		t.Fatalf("stdout = %s", stdout)
+	}
+	if strings.Contains(stdout, "pm_cli_secret") || strings.Contains(stderr, "pm_cli_secret") || strings.Contains(err.Error(), "pm_cli_secret") {
+		t.Fatalf("token leaked: %s %s %v", stdout, stderr, err)
+	}
+	if len(prober.requests) != 1 || prober.requests[0].Protocol != doctor.ProtocolPyPI || prober.requests[0].Token != "pm_cli_secret" {
+		t.Fatalf("requests = %#v", prober.requests)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q", stderr)
+	}
+}
+
+func TestDoctorCommandJSONAliasAndCleanExitWhenHealthy(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".npmrc"), []byte("registry=https://pkg.packagemaze.com/acme/npm/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	prober := &recordingProber{result: doctor.ProbeResult{Outcome: doctor.ProbeAccepted, StatusCode: 200, Username: "kko"}}
+	stdout, stderr, err := runCommandWithDoctorDeps(
+		doctor.Dependencies{Env: mapLookup(map[string]string{"MAZE_TOKEN": "pm_cli_secret"}), Prober: prober},
+		"doctor", "--dir", dir, "--json",
+	)
+	if err != nil {
+		t.Fatalf("err = %v\nstderr: %s", err, stderr)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
+		t.Fatalf("stdout was not JSON: %v\n%s", err, stdout)
+	}
+	if payload["status"] != "pass" {
+		t.Fatalf("status = %v", payload["status"])
+	}
+	if strings.Contains(stdout, "pm_cli_secret") {
+		t.Fatalf("token leaked: %s", stdout)
+	}
+}
+
+func TestDoctorCommandRejectsUnknownFormats(t *testing.T) {
+	_, _, err := runCommandWithDoctorDeps(doctor.Dependencies{Env: mapLookup(nil)}, "doctor", "--dir", t.TempDir(), "--format", "yaml")
+	if err == nil || !strings.Contains(err.Error(), "format must be markdown or json") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+type recordingProber struct {
+	requests []doctor.ProbeRequest
+	result   doctor.ProbeResult
+}
+
+func (r *recordingProber) Probe(_ context.Context, request doctor.ProbeRequest) doctor.ProbeResult {
+	r.requests = append(r.requests, request)
+	return r.result
 }
