@@ -3,6 +3,7 @@ package doctor
 import (
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // Flow collections deeper than this are kept as text. Nothing maze doctor reads
@@ -193,7 +194,7 @@ func parseQuotedString(value string) (string, bool) {
 					return "", false
 				}
 				code, err := strconv.ParseUint(value[index+1:index+1+length], 16, 32)
-				if err != nil {
+				if err != nil || code > unicode.MaxRune {
 					return "", false
 				}
 				result.WriteRune(rune(code))

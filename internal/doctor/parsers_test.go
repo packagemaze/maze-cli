@@ -50,6 +50,15 @@ registry = { url = "https://pkg.packagemaze.com/acme/npm/", token = "pm_literal"
 	}
 }
 
+func TestQuotedStringEscapesStayWithinUnicode(t *testing.T) {
+	if parsed, ok := parseQuotedString(`"caf\u00e9 \U0001F600"`); !ok || parsed != "café 😀" {
+		t.Fatalf("escapes = %q %v", parsed, ok)
+	}
+	if _, ok := parseQuotedString(`"\UFFFFFFFF"`); ok {
+		t.Fatal("a code point beyond unicode.MaxRune was accepted")
+	}
+}
+
 func TestDeeplyNestedFlowCollectionsStayBounded(t *testing.T) {
 	nested := strings.Repeat("[", 2000) + "x" + strings.Repeat("]", 2000)
 	root := parseTOML("value = " + nested + "\n")
