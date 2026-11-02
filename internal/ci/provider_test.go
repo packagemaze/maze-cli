@@ -111,7 +111,9 @@ func TestCircleCIClientContextUsesOnlyTheEnvironmentAllowlist(t *testing.T) {
 func TestRequestGitHubOIDCToken(t *testing.T) {
 	var gotAudience string
 	var gotAuthorization string
+	var attempts int
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		attempts++
 		gotAudience = request.URL.Query().Get("audience")
 		gotAuthorization = request.Header.Get("Authorization")
 		_, _ = writer.Write([]byte(`{"value":"github-oidc-token"}`))
@@ -138,6 +140,9 @@ func TestRequestGitHubOIDCToken(t *testing.T) {
 	}
 	if gotAuthorization != "bearer runtime-token" {
 		t.Fatalf("Authorization = %q", gotAuthorization)
+	}
+	if attempts != 1 {
+		t.Fatalf("requests = %d, want 1", attempts)
 	}
 }
 

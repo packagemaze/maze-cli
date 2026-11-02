@@ -203,9 +203,9 @@ permissions:
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("Authorization", "bearer "+strings.TrimSpace(requestToken))
 
-	response, err := httpClient.Do(request)
+	response, err := requestGitHubOIDCWithRetry(ctx, httpClient, request)
 	if err != nil {
-		return "", fmt.Errorf("request GitHub Actions OIDC token: %w", err)
+		return "", fmt.Errorf("request GitHub Actions OIDC token: %w", safeGitHubOIDCError(err, strings.TrimSpace(requestToken)))
 	}
 	defer response.Body.Close()
 
