@@ -53,7 +53,8 @@ func gitHubOIDCRetryWait(response *http.Response, err error) (time.Duration, boo
 		var networkError net.Error
 		retry := (errors.As(err, &networkError) && networkError.Timeout()) ||
 			errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
-			errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNABORTED) || errors.Is(err, syscall.EPIPE)
+			errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNABORTED) || errors.Is(err, syscall.EPIPE) ||
+			gitHubOIDCPlatformConnectionError(err)
 		return gitHubOIDCRetryDelay, retry
 	}
 	switch response.StatusCode {
