@@ -20,6 +20,7 @@ const (
 	ProviderGitHub   Provider = "github"
 	ProviderGitLab   Provider = "gitlab"
 	ProviderCircleCI Provider = "circleci"
+	ProviderOIDC     Provider = "oidc"
 	ProviderManual   Provider = "manual"
 )
 
@@ -46,10 +47,10 @@ func ParseProvider(value string) (Provider, error) {
 	switch normalized {
 	case "", ProviderAuto:
 		return ProviderAuto, nil
-	case ProviderGitHub, ProviderGitLab, ProviderCircleCI, ProviderManual:
+	case ProviderGitHub, ProviderGitLab, ProviderCircleCI, ProviderOIDC, ProviderManual:
 		return normalized, nil
 	default:
-		return "", fmt.Errorf("provider must be auto, github, gitlab, circleci, or manual")
+		return "", fmt.Errorf("provider must be auto, github, gitlab, circleci, oidc, or manual")
 	}
 }
 

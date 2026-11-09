@@ -122,6 +122,23 @@ maze auth exchange-oidc \
   --purpose install
 ```
 
+On GitHub Actions and CircleCI, `maze` requests the job's identity token
+itself. On any other platform PackageMaze has an OIDC access rule for, request
+the platform's identity token for the audience `https://api.packagemaze.com`
+and pass it in with `--provider oidc`:
+
+```sh
+<your platform's token command> | maze auth exchange-oidc \
+  --provider oidc --oidc-token-stdin \
+  --feed <organization>/<feed> \
+  --purpose install
+```
+
+`--oidc-token-file` and `MAZE_OIDC_TOKEN` work the same way. The token never
+appears in arguments or output. PackageMaze accepts an identity token once, so
+request a fresh one for each exchange. Publishing through `--provider oidc` is
+not supported yet.
+
 Required flags:
 
 - `--feed <organization>/<feed>`
