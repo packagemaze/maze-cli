@@ -58,11 +58,6 @@ func TestResolveValidation(t *testing.T) {
 			wantErr: "--purpose",
 		},
 		{
-			name:    "publish missing package",
-			config:  Config{Provider: "manual", Feeds: []string{"your-org/npm"}, Purpose: "publish"},
-			wantErr: "--package is required",
-		},
-		{
 			name:    "package rejected for install",
 			config:  Config{Provider: "manual", Feeds: []string{"your-org/npm"}, Purpose: "install", Package: "pkg"},
 			wantErr: "only supported",

@@ -170,9 +170,8 @@ Required flags:
 - `--feed <organization>/<feed>`, repeatable
 - `--purpose {install | publish | docker-build | test}`
 
-Publishing also requires:
-
-- `--package <package-name>`
+`--package <package-name>` is optional with `--purpose publish` and has no
+effect on what the Token may publish.
 
 Output formats:
 

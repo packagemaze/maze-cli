@@ -186,9 +186,6 @@ func validateResolved(config ResolvedConfig, env ci.LookupEnv) error {
 	default:
 		return fmt.Errorf("--purpose must be install, publish, docker-build, or test")
 	}
-	if config.Purpose == "publish" && strings.TrimSpace(config.Package) == "" {
-		return fmt.Errorf("--package is required when --purpose publish")
-	}
 	if config.Purpose != "publish" && strings.TrimSpace(config.Package) != "" {
 		return fmt.Errorf("--package is only supported when --purpose publish")
 	}

@@ -72,7 +72,7 @@ func newExchangeOIDCCommand(deps auth.Dependencies) *cobra.Command {
 		Long: "Exchange a CI OIDC identity token for a short-lived PackageMaze Token.\n\n" +
 			"The command supports GitHub Actions and CircleCI, and any other platform PackageMaze has an OIDC access rule for: request that platform's identity token for the PackageMaze audience and pass it with --provider oidc. Manual token input is for local development. GitLab token input is recognized for forward compatibility, but PackageMaze does not yet accept GitLab identities in production.",
 		Example: "  maze auth exchange-oidc --feed your-org/your-feed --purpose install --format github-output\n" +
-			"  maze auth exchange-oidc --feed your-org/your-feed --purpose publish --package your-package --format github-output" + "\n" +
+			"  maze auth exchange-oidc --feed your-org/your-feed --purpose publish --format github-output" + "\n" +
 			"  your-platform-token-command | maze auth exchange-oidc --provider oidc --oidc-token-stdin --feed your-org/your-feed --purpose install\n" +
 			"  maze auth exchange-oidc --feed your-org/npm --feed your-org/pypi --purpose install",
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -112,7 +112,7 @@ func newExchangeOIDCCommand(deps auth.Dependencies) *cobra.Command {
 	flags.StringVar(&config.APIURL, "api-url", "", "Full PackageMaze API root URL override (default: {base-url}/v1)")
 	flags.StringArrayVar(&config.Feeds, "feed", nil, "PackageMaze Feed in `org/feed` form. Repeat it, up to 20 times, to get one Token for several Feeds of one Organization: not with --purpose publish, and with --format token or json only")
 	flags.StringVar(&config.Purpose, "purpose", "", "Token request purpose: install, publish, docker-build, or test")
-	flags.StringVar(&config.Package, "package", "", "Package name; required when --purpose publish")
+	flags.StringVar(&config.Package, "package", "", "Package name, accepted with --purpose publish only. Optional: it has no effect on what the Token may publish")
 	flags.StringVar(&config.Provider, "provider", "auto", "CI provider: auto, github, gitlab, circleci, oidc, or manual. Use oidc for any other platform PackageMaze has an OIDC access rule for, with a supplied token")
 	flags.StringVar(&config.Audience, "audience", "", "OIDC audience to request or expect (default: {base-url})")
 	flags.StringVar(&config.OIDCTokenEnv, "oidc-token-env", auth.DefaultOIDCTokenEnv, "Environment variable containing an OIDC token")
