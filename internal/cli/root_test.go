@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -160,6 +161,51 @@ func TestExchangeOIDCJSONAliasConflictsWithFormat(t *testing.T) {
 	)
 	if err == nil || !strings.Contains(err.Error(), "--json cannot be combined") {
 		t.Fatalf("expected --json conflict, got %v", err)
+	}
+}
+
+func TestShowIdentityCommandPrintsClaimsWithoutContactingPackageMaze(t *testing.T) {
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256","kid":"key-1"}`))
+	claims := base64.RawURLEncoding.EncodeToString([]byte(`{"iss":"https://ci.example.com","aud":"https://api.packagemaze.com","exp":4102444800,"repository":"acme/app"}`))
+	signature := "c2lnbmF0dXJlLWZpeHR1cmU"
+	exchanger := &recordingExchanger{}
+	command := NewRootCommand(auth.Dependencies{Env: mapLookup(nil), Exchanger: exchanger})
+	var stdout, stderr bytes.Buffer
+	command.SetOut(&stdout)
+	command.SetErr(&stderr)
+	command.SetIn(strings.NewReader(header + "." + claims + "." + signature + "\n"))
+	command.SetArgs([]string{"auth", "show-identity", "--provider", "oidc", "--oidc-token-stdin"})
+	if err := command.Execute(); err != nil {
+		t.Fatalf("command returned error: %v\nstderr: %s", err, stderr.String())
+	}
+	output := stdout.String()
+	for _, want := range []string{
+		"Decoded locally and not verified; nothing was sent to PackageMaze.\n",
+		"Issuer:    https://ci.example.com\n",
+		"Expires:   2100-01-01 00:00:00 UTC (in ",
+		"Key id:    key-1\n",
+		"  repository  acme/app\n",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("stdout missing %q:\n%s", want, output)
+		}
+	}
+	for _, part := range []string{header, claims, signature} {
+		if strings.Contains(output+stderr.String(), part) {
+			t.Fatalf("output contains a token segment")
+		}
+	}
+	if exchanger.called {
+		t.Fatalf("show-identity called PackageMaze")
+	}
+
+	command = NewRootCommand(auth.Dependencies{Env: mapLookup(map[string]string{"MAZE_OIDC_TOKEN": "not-a-jwt-fixture"})})
+	stdout.Reset()
+	command.SetOut(&stdout)
+	command.SetArgs([]string{"auth", "show-identity", "--provider", "oidc", "--json"})
+	err := command.Execute()
+	if err == nil || err.Error() != "the identity token could not be read: it is not three dot-separated parts" {
+		t.Fatalf("err = %v", err)
 	}
 }
 
