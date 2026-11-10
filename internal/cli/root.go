@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -9,6 +10,7 @@ import (
 	"github.com/packagemaze/maze-cli/internal/auth"
 	"github.com/packagemaze/maze-cli/internal/doctor"
 	"github.com/packagemaze/maze-cli/internal/endpoint"
+	"github.com/packagemaze/maze-cli/internal/identity"
 	"github.com/packagemaze/maze-cli/internal/output"
 	publishcmd "github.com/packagemaze/maze-cli/internal/publish"
 	"github.com/packagemaze/maze-cli/internal/version"
@@ -57,6 +59,7 @@ func newAuthCommand(deps auth.Dependencies) *cobra.Command {
 		Short: "Work with PackageMaze authentication",
 	}
 	authCommand.AddCommand(newExchangeOIDCCommand(deps))
+	authCommand.AddCommand(newShowIdentityCommand(deps))
 	return authCommand
 }
 
@@ -121,6 +124,78 @@ func newExchangeOIDCCommand(deps auth.Dependencies) *cobra.Command {
 	_ = command.MarkFlagRequired("feed")
 	_ = command.MarkFlagRequired("purpose")
 	return command
+}
+
+func newShowIdentityCommand(deps auth.Dependencies) *cobra.Command {
+	var config auth.Config
+	var format string
+	var jsonAlias bool
+	command := &cobra.Command{
+		Use:   "show-identity",
+		Short: "Print the claims in this job's identity token without signing in",
+		Long: "Obtain this job's identity token exactly as exchange-oidc does, decode it locally, and print the claims it carries, so a platform can be set up in PackageMaze without failing a run first.\n\n" +
+			"The token is not verified and nothing is sent to PackageMaze. Every claim value the token carries is printed to the job log; the token itself and its signature are never printed.",
+		Example: "  maze auth show-identity\n" +
+			"  your-platform-token-command | maze auth show-identity --provider oidc --oidc-token-stdin\n" +
+			"  maze auth show-identity --format json",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			formatValue, err := parseIdentityFormat(format, jsonAlias)
+			if err != nil {
+				return err
+			}
+			runDeps := deps
+			if runDeps.Env == nil {
+				runDeps.Env = auth.DefaultDependencies().Env
+			}
+			runDeps.Stdin = cmd.InOrStdin()
+			resolved, err := auth.ResolveIdentitySource(config, runDeps)
+			if err != nil {
+				return err
+			}
+			rawToken, err := auth.AcquireIdentityToken(cmd.Context(), resolved, runDeps)
+			if err != nil {
+				return err
+			}
+			token, err := identity.Decode(rawToken)
+			if err != nil {
+				return err
+			}
+			if formatValue == "json" {
+				return identity.WriteJSON(cmd.OutOrStdout(), token)
+			}
+			return identity.WriteText(cmd.OutOrStdout(), token, time.Now())
+		},
+	}
+	flags := command.Flags()
+	flags.StringVar(&config.BaseURL, "base-url", "", "PackageMaze API Domain base URL; sets the default audience (default: MAZE_BASE_URL, else https://api.packagemaze.com)")
+	flags.StringVar(&config.Provider, "provider", "auto", "CI provider: auto, github, gitlab, circleci, oidc, or manual. Use oidc for any other platform, with a supplied token")
+	flags.StringVar(&config.Audience, "audience", "", "OIDC audience to request (default: {base-url})")
+	flags.StringVar(&config.OIDCTokenEnv, "oidc-token-env", auth.DefaultOIDCTokenEnv, "Environment variable containing an OIDC token")
+	flags.StringVar(&config.OIDCTokenFile, "oidc-token-file", "", "File containing an OIDC token")
+	flags.BoolVar(&config.OIDCTokenStdin, "oidc-token-stdin", false, "Read the OIDC token from stdin")
+	flags.StringVar(&format, "format", "text", "Output format: text or json")
+	flags.BoolVar(&jsonAlias, "json", false, "Alias for --format json")
+	flags.BoolVar(&config.AllowInsecureLocalhost, "allow-insecure-localhost", false, "Allow http URLs only for localhost development")
+	return command
+}
+
+func parseIdentityFormat(format string, jsonAlias bool) (string, error) {
+	normalized := strings.ToLower(strings.TrimSpace(format))
+	if jsonAlias {
+		if normalized != "" && normalized != "text" {
+			return "", fmt.Errorf("--json cannot be combined with --format")
+		}
+		return "json", nil
+	}
+	switch normalized {
+	case "", "text":
+		return "text", nil
+	case "json":
+		return "json", nil
+	default:
+		return "", fmt.Errorf("format must be text or json")
+	}
 }
 
 func newPublishCommand(authDeps auth.Dependencies, publishDeps publishcmd.Dependencies) *cobra.Command {
