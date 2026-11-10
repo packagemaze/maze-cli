@@ -401,3 +401,112 @@ func loadCITokenContractFixture(t *testing.T) ciTokenContractFixture {
 	}
 	return fixture
 }
+
+const todaysRejectedIdentityDetail = `"category":"workload_identity_rejected","code":"workload_identity_rejected","message":"PackageMaze rejected this CI identity.","recovery":"Check the PackageMaze CI access rule and retry the CI job."`
+
+const todaysRejectedIdentityRefusalHead = `PackageMaze rejected this CI identity.
+Feed:
+  your-org/npm
+Provider:
+  oidc
+Purpose:
+  install
+The backend said:
+  PackageMaze rejected this CI identity.
+Error code:
+  workload_identity_rejected
+PackageMaze suggests:
+  Check the PackageMaze CI access rule and retry the CI job.`
+
+const todaysRejectedIdentityChecks = `
+Check:
+  - the CI trust rule configured for this Feed
+  - the workflow, branch, or tag rule
+  - the PackageMaze Feed name`
+
+func TestClientExchangeCIRefusalDetails(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		extra  string
+		want   string
+	}{
+		{
+			name:   "today's refusal is unchanged",
+			status: http.StatusUnauthorized,
+			want:   todaysRejectedIdentityRefusalHead + todaysRejectedIdentityChecks,
+		},
+		{
+			name:   "details page and sign-in id replace the guessed checks",
+			status: http.StatusUnauthorized,
+			extra:  `,"sign_in_id":"signin_01fixture","details_url":"https://www.packagemaze.com/acme/sign-ins/signin_01fixture"`,
+			want: todaysRejectedIdentityRefusalHead + "\n" +
+				"Details (sign in to PackageMaze): https://www.packagemaze.com/acme/sign-ins/signin_01fixture\n" +
+				"Sign-in id: signin_01fixture",
+		},
+		{
+			name:   "details page without sign-in id",
+			status: http.StatusForbidden,
+			extra:  `,"details_url":"https://www.packagemaze.com/acme/sign-ins/x"`,
+			want: todaysRejectedIdentityRefusalHead + "\n" +
+				"Details (sign in to PackageMaze): https://www.packagemaze.com/acme/sign-ins/x",
+		},
+		{
+			name:   "sign-in id without a details page is not shown",
+			status: http.StatusUnauthorized,
+			extra:  `,"sign_in_id":"signin_01fixture"`,
+			want:   todaysRejectedIdentityRefusalHead + todaysRejectedIdentityChecks,
+		},
+		{
+			name:   "http details page is ignored",
+			status: http.StatusUnauthorized,
+			extra:  `,"sign_in_id":"s","details_url":"http://www.packagemaze.com/acme/sign-ins/s"`,
+			want:   todaysRejectedIdentityRefusalHead + todaysRejectedIdentityChecks,
+		},
+		{
+			name:   "relative details page is ignored",
+			status: http.StatusUnauthorized,
+			extra:  `,"sign_in_id":"s","details_url":"/acme/sign-ins/s"`,
+			want:   todaysRejectedIdentityRefusalHead + todaysRejectedIdentityChecks,
+		},
+		{
+			name:   "non-string details page is ignored",
+			status: http.StatusUnauthorized,
+			extra:  `,"details_url":{"href":"https://www.packagemaze.com/"}`,
+			want:   todaysRejectedIdentityRefusalHead + todaysRejectedIdentityChecks,
+		},
+		{
+			name:   "details page with an ASCII control character is ignored",
+			status: http.StatusUnauthorized,
+			extra:  `,"details_url":"https://www.packagemaze.com/a\nb"`,
+			want:   todaysRejectedIdentityRefusalHead + todaysRejectedIdentityChecks,
+		},
+		{
+			name:   "control characters are escaped",
+			status: http.StatusUnauthorized,
+			extra:  `,"sign_in_id":"s\nFeed:\u001b[2J","details_url":"https://www.packagemaze.com/a\u009bb"`,
+			want: todaysRejectedIdentityRefusalHead + "\n" +
+				`Details (sign in to PackageMaze): https://www.packagemaze.com/a\u009bb` + "\n" +
+				`Sign-in id: s\nFeed:\u001b[2J`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				writer.WriteHeader(test.status)
+				_, _ = writer.Write([]byte(`{"detail":{` + todaysRejectedIdentityDetail + test.extra + `}}`))
+			}))
+			defer server.Close()
+
+			_, err := NewClient(server.URL+"/v1", server.Client()).ExchangeCI(context.Background(), CITokenRequest{
+				Provider: "oidc", Feed: "your-org/npm", Purpose: "install", Audience: "https://api.packagemaze.com", OIDCToken: "oidc-secret",
+			})
+			if err == nil {
+				t.Fatal("expected status error")
+			}
+			if err.Error() != test.want {
+				t.Fatalf("error =\n%s\nwant\n%s", err.Error(), test.want)
+			}
+		})
+	}
+}

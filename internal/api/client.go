@@ -12,6 +12,7 @@ import (
 	"path"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/packagemaze/maze-cli/internal/version"
 )
@@ -53,6 +54,8 @@ type StatusError struct {
 	Detail     string
 	Code       string
 	Recovery   string
+	SignInID   string
+	DetailsURL string
 	Provider   string
 	Feed       string
 	Purpose    string
@@ -72,7 +75,7 @@ func (e *StatusError) Error() string {
 		recovery = fmt.Sprintf("\nPackageMaze suggests:\n  %s", strings.TrimSpace(e.Recovery))
 	}
 	if e.StatusCode == http.StatusUnauthorized || e.StatusCode == http.StatusForbidden {
-		return fmt.Sprintf(`PackageMaze rejected this CI identity.
+		refusal := fmt.Sprintf(`PackageMaze rejected this CI identity.
 Feed:
   %s
 Provider:
@@ -80,16 +83,58 @@ Provider:
 Purpose:
   %s
 The backend said:
-  %s%s%s
+  %s%s%s`, e.Feed, e.Provider, e.Purpose, detail, code, recovery)
+		if detailsURL, ok := httpsURL(e.DetailsURL); ok {
+			return refusal + "\n" + refusalDetails(detailsURL, e.SignInID)
+		}
+		return refusal + `
 Check:
   - the CI trust rule configured for this Feed
   - the workflow, branch, or tag rule
-  - the PackageMaze Feed name`, e.Feed, e.Provider, e.Purpose, detail, code, recovery)
+  - the PackageMaze Feed name`
 	}
 	if e.StatusCode >= 500 {
 		return fmt.Sprintf("PackageMaze token exchange failed because the server returned HTTP %d: %s%s%s", e.StatusCode, detail, code, recovery)
 	}
 	return fmt.Sprintf("PackageMaze token exchange request was rejected with HTTP %d: %s%s%s", e.StatusCode, detail, code, recovery)
+}
+
+// refusalDetails replaces the guessed checklist when PackageMaze names a
+// members-only page that holds the real reason for the refusal.
+func refusalDetails(detailsURL string, signInID string) string {
+	lines := "Details (sign in to PackageMaze): " + escapeControl(detailsURL)
+	if signInID = strings.TrimSpace(signInID); signInID != "" {
+		lines += "\nSign-in id: " + escapeControl(signInID)
+	}
+	return lines
+}
+
+func httpsURL(value string) (string, bool) {
+	value = strings.TrimSpace(value)
+	parsed, err := url.Parse(value)
+	if err != nil || !parsed.IsAbs() || parsed.Scheme != "https" || parsed.Host == "" {
+		return "", false
+	}
+	return value, true
+}
+
+func escapeControl(value string) string {
+	var out strings.Builder
+	for _, r := range value {
+		switch {
+		case r == '\n':
+			out.WriteString(`\n`)
+		case r == '\r':
+			out.WriteString(`\r`)
+		case r == '\t':
+			out.WriteString(`\t`)
+		case unicode.IsControl(r):
+			fmt.Fprintf(&out, `\u%04x`, r)
+		default:
+			out.WriteRune(r)
+		}
+	}
+	return out.String()
 }
 
 type MalformedResponseError struct {
@@ -143,6 +188,8 @@ func (c *Client) ExchangeCI(ctx context.Context, request CITokenRequest) (CIToke
 			Detail:     redactSecret(detail.Message, request.OIDCToken),
 			Code:       redactSecret(detail.Code, request.OIDCToken),
 			Recovery:   redactSecret(detail.Recovery, request.OIDCToken),
+			SignInID:   redactSecret(detail.SignInID, request.OIDCToken),
+			DetailsURL: redactSecret(detail.DetailsURL, request.OIDCToken),
 			Provider:   request.Provider,
 			Feed:       request.Feed,
 			Purpose:    request.Purpose,
@@ -221,9 +268,11 @@ func joinEndpoint(apiURL string, child string) (string, error) {
 }
 
 type errorResponseDetail struct {
-	Code     string
-	Message  string
-	Recovery string
+	Code       string
+	Message    string
+	Recovery   string
+	SignInID   string
+	DetailsURL string
 }
 
 func responseDetail(body io.Reader) errorResponseDetail {
@@ -249,9 +298,11 @@ func parsedErrorDetail(value any) errorResponseDetail {
 		return errorResponseDetail{Message: strings.TrimSpace(typed)}
 	case map[string]any:
 		return errorResponseDetail{
-			Code:     firstStringValue(typed, "code", "state", "type"),
-			Message:  firstStringValue(typed, "message", "reason", "msg", "error_description", "error"),
-			Recovery: firstStringValue(typed, "recovery"),
+			Code:       firstStringValue(typed, "code", "state", "type"),
+			Message:    firstStringValue(typed, "message", "reason", "msg", "error_description", "error"),
+			Recovery:   firstStringValue(typed, "recovery"),
+			SignInID:   firstStringValue(typed, "sign_in_id"),
+			DetailsURL: firstStringValue(typed, "details_url"),
 		}
 	case []any:
 		messages := make([]string, 0, min(len(typed), 5))
