@@ -20,12 +20,14 @@ The implemented commands are:
 ```sh
 maze doctor
 maze auth exchange-oidc
+maze auth show-identity
 maze publish dist/* --feed <organization>/<feed>
 ```
 
 `maze doctor` diagnoses a repository's PackageMaze setup without changing it.
 `maze auth exchange-oidc` exchanges a CI OIDC identity token for a short-lived
-PackageMaze Token. `maze publish` sends local artifact facts to PackageMaze,
+PackageMaze Token. `maze auth show-identity` prints the claims in the job's identity token
+without signing in. `maze publish` sends local artifact facts to PackageMaze,
 executes the returned backend plan, uploads bytes, and waits for Publish
 Finalization by default. Local and staging development use the normal endpoint
 overrides.
@@ -168,6 +170,29 @@ printf '%s' "$OIDC_TOKEN" | maze auth exchange-oidc \
   --purpose install \
   --format json
 ```
+
+## Show Identity
+
+When you set up a CI or sandbox platform in PackageMaze, run
+`maze auth show-identity` in a job to see which claims its identity token
+carries, before any sign-in fails:
+
+```sh
+<your platform's token command> | maze auth show-identity \
+  --provider oidc --oidc-token-stdin
+```
+
+The command obtains the token exactly as `maze auth exchange-oidc` does (same
+`--provider`, `--oidc-token-stdin`, `--oidc-token-file`, `--oidc-token-env`,
+`--audience`, and `--base-url`), decodes it locally, and prints the issuer,
+audience, expiry, signing algorithm and key id, then every other claim sorted
+by name. `--format json` prints `{"verified": false, "header": {...},
+"claims": {...}}`. The token is not verified and nothing is sent to
+PackageMaze.
+
+Every claim value is printed to the job log. The token itself and its
+signature are never printed, and control characters in claim names and values
+are escaped.
 
 ## Publish
 
