@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf16"
 	"unicode/utf8"
 )
 
@@ -121,7 +122,8 @@ func compactJSON(value any) (string, error) {
 }
 
 // escapeControl makes a token-supplied string safe to print on one line: it
-// cannot start a new log line or emit a terminal sequence.
+// cannot start a new log line, emit a terminal sequence, or reorder the text
+// around it with invisible formatting characters.
 func escapeControl(value string) string {
 	var out strings.Builder
 	for index, r := range value {
@@ -134,13 +136,23 @@ func escapeControl(value string) string {
 			out.WriteString(`\r`)
 		case r == '\t':
 			out.WriteString(`\t`)
-		case unicode.IsControl(r):
-			fmt.Fprintf(&out, `\u%04x`, r)
+		case unicode.IsControl(r), unicode.Is(unicode.Cf, r):
+			writeEscapedRune(&out, r)
 		default:
 			out.WriteRune(r)
 		}
 	}
 	return out.String()
+}
+
+// writeEscapedRune writes a JSON-style escape, as a surrogate pair outside
+// the Basic Multilingual Plane.
+func writeEscapedRune(out *strings.Builder, r rune) {
+	if high, low := utf16.EncodeRune(r); high != unicode.ReplacementChar {
+		fmt.Fprintf(out, `\u%04x\u%04x`, high, low)
+		return
+	}
+	fmt.Fprintf(out, `\u%04x`, r)
 }
 
 func isInvalidByte(value string, index int) bool {

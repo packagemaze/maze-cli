@@ -77,6 +77,8 @@ func TestDisplayValue(t *testing.T) {
 		{name: "C1 control escaped", claims: `{"v":"\u009b31m"}`, want: `\u009b31m`},
 		{name: "C1 control escaped inside JSON", claims: `{"v":["\u009b"]}`, want: `["\u009b"]`},
 		{name: "carriage return and tab escaped", claims: `{"v":"a\rb\tc"}`, want: `a\rb\tc`},
+		{name: "bidirectional override escaped", claims: `{"v":"main\u202egnp.exe"}`, want: `main\u202egnp.exe`},
+		{name: "invisible formatting outside the BMP escaped", claims: `{"v":"a\udb40\udc01b"}`, want: `a\udb40\udc01b`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

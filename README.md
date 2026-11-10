@@ -26,9 +26,9 @@ maze publish dist/* --feed <organization>/<feed>
 
 `maze doctor` diagnoses a repository's PackageMaze setup without changing it.
 `maze auth exchange-oidc` exchanges a CI OIDC identity token for a short-lived
-PackageMaze Token. `maze auth show-identity` prints the claims in the job's identity token
-without signing in. `maze publish` sends local artifact facts to PackageMaze,
-executes the returned backend plan, uploads bytes, and waits for Publish
+PackageMaze Token. `maze auth show-identity` prints the claims in the job's
+identity token without signing in. `maze publish` sends local artifact facts
+to PackageMaze, executes the returned backend plan, uploads bytes, and waits for Publish
 Finalization by default. Local and staging development use the normal endpoint
 overrides.
 
