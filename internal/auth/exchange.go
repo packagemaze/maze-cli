@@ -136,31 +136,15 @@ func Exchange(ctx context.Context, config Config, deps Dependencies) (output.Res
 }
 
 func Resolve(config Config, deps Dependencies) (ResolvedConfig, error) {
-	env := deps.Env
-	if env == nil {
-		env = ci.DefaultLookupEnv
-	}
-	config.BaseURL = firstNonEmpty(config.BaseURL, envValue(env, "MAZE_BASE_URL"), DefaultBaseURL)
-	config.BaseURL = strings.TrimRight(strings.TrimSpace(config.BaseURL), "/")
-	if config.APIURL == "" {
-		config.APIURL = config.BaseURL + "/v1"
-	}
-	config.APIURL = strings.TrimRight(strings.TrimSpace(config.APIURL), "/")
-	if config.Audience == "" {
-		config.Audience = config.BaseURL
-	}
-	config.Audience = strings.TrimSpace(config.Audience)
+	env := lookupEnv(deps)
+	config = withIdentitySourceDefaults(config, env)
 	config.SetupInvocationID = firstNonEmpty(
 		config.SetupInvocationID,
 		envValue(env, DefaultSetupInvocationIDEnv),
 	)
 	config.ReportedRef = trimmedOptional(config.ReportedRef)
 	config.ReportedCommit = trimmedOptional(config.ReportedCommit)
-	config.OIDCTokenEnv = firstNonEmpty(config.OIDCTokenEnv, DefaultOIDCTokenEnv)
 	config.OutputName = firstNonEmpty(config.OutputName, DefaultOutputName)
-	if config.Timeout == 0 {
-		config.Timeout = 15 * time.Second
-	}
 	if config.JSONAlias {
 		if strings.TrimSpace(config.Format) != "" && strings.TrimSpace(config.Format) != string(output.FormatToken) {
 			return ResolvedConfig{}, fmt.Errorf("--json cannot be combined with --format")
@@ -204,14 +188,8 @@ func validateResolved(config ResolvedConfig, env ci.LookupEnv) error {
 	if config.Timeout <= 0 {
 		return fmt.Errorf("--timeout must be positive")
 	}
-	if err := endpoint.ValidateURL("base-url", config.BaseURL, config.AllowInsecureLocalhost); err != nil {
+	if err := validateEndpoints(config); err != nil {
 		return err
-	}
-	if err := endpoint.ValidateURL("api-url", config.APIURL, config.AllowInsecureLocalhost); err != nil {
-		return err
-	}
-	if strings.TrimSpace(config.Audience) == "" {
-		return fmt.Errorf("--audience must not be empty")
 	}
 	if config.SetupInvocationID != "" && !setupInvocationIDPattern.MatchString(config.SetupInvocationID) {
 		return fmt.Errorf("--setup-invocation-id must be 1-160 letters, numbers, dots, underscores, colons, or hyphens; prefix generated ids with the wrapper name")
@@ -222,8 +200,8 @@ func validateResolved(config ResolvedConfig, env ci.LookupEnv) error {
 	if err := validateReported("--commit", config.ReportedCommit); err != nil {
 		return err
 	}
-	if config.OIDCTokenFile != "" && config.OIDCTokenStdin {
-		return fmt.Errorf("choose either --oidc-token-file or --oidc-token-stdin, not both")
+	if err := validateTokenInput(config); err != nil {
+		return err
 	}
 	if config.FormatValue == output.FormatGitHubOutput {
 		if !outputNamePattern.MatchString(config.OutputName) {
@@ -265,6 +243,62 @@ func validateReported(flag string, value *string) error {
 	return nil
 }
 
+// ResolveIdentitySource resolves only what obtaining the job's identity token
+// needs, so commands that never exchange it share exchange-oidc's handling.
+func ResolveIdentitySource(config Config, deps Dependencies) (ResolvedConfig, error) {
+	env := lookupEnv(deps)
+	config = withIdentitySourceDefaults(config, env)
+	providerValue, err := resolveProvider(config, env)
+	if err != nil {
+		return ResolvedConfig{}, err
+	}
+	resolved := ResolvedConfig{Config: config, ProviderValue: providerValue}
+	if err := validateEndpoints(resolved); err != nil {
+		return ResolvedConfig{}, err
+	}
+	if err := validateTokenInput(resolved); err != nil {
+		return ResolvedConfig{}, err
+	}
+	return resolved, nil
+}
+
+// AcquireIdentityToken obtains the job's identity token exactly as
+// exchange-oidc does. The value is a credential: callers must not print it.
+func AcquireIdentityToken(ctx context.Context, config ResolvedConfig, deps Dependencies) (string, error) {
+	return acquireOIDCToken(ctx, config, deps)
+}
+
+func withIdentitySourceDefaults(config Config, env ci.LookupEnv) Config {
+	config.BaseURL = firstNonEmpty(config.BaseURL, envValue(env, "MAZE_BASE_URL"), DefaultBaseURL)
+	config.BaseURL = strings.TrimRight(strings.TrimSpace(config.BaseURL), "/")
+	if config.APIURL == "" {
+		config.APIURL = config.BaseURL + "/v1"
+	}
+	config.APIURL = strings.TrimRight(strings.TrimSpace(config.APIURL), "/")
+	if config.Audience == "" {
+		config.Audience = config.BaseURL
+	}
+	config.Audience = strings.TrimSpace(config.Audience)
+	config.OIDCTokenEnv = firstNonEmpty(config.OIDCTokenEnv, DefaultOIDCTokenEnv)
+	if config.Timeout == 0 {
+		config.Timeout = 15 * time.Second
+	}
+	return config
+}
+
+func validateEndpoints(config ResolvedConfig) error {
+	if err := endpoint.ValidateURL("base-url", config.BaseURL, config.AllowInsecureLocalhost); err != nil {
+		return err
+	}
+	if err := endpoint.ValidateURL("api-url", config.APIURL, config.AllowInsecureLocalhost); err != nil {
+		return err
+	}
+	if strings.TrimSpace(config.Audience) == "" {
+		return fmt.Errorf("--audience must not be empty")
+	}
+	return nil
+}
+
 func trimmedOptional(value *string) *string {
 	if value == nil {
 		return nil
@@ -278,6 +312,20 @@ func valueOrEmpty(value *string) string {
 		return ""
 	}
 	return *value
+}
+
+func validateTokenInput(config ResolvedConfig) error {
+	if config.OIDCTokenFile != "" && config.OIDCTokenStdin {
+		return fmt.Errorf("choose either --oidc-token-file or --oidc-token-stdin, not both")
+	}
+	return nil
+}
+
+func lookupEnv(deps Dependencies) ci.LookupEnv {
+	if deps.Env == nil {
+		return ci.DefaultLookupEnv
+	}
+	return deps.Env
 }
 
 func parseClientContext(value string) (map[string]any, error) {
