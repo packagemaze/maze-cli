@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -94,6 +95,41 @@ func TestExchangeOIDCCommandForwardsSetupInvocationID(t *testing.T) {
 	}
 	if exchanger.request.SetupInvocationID != "setup-maze_flag-id" {
 		t.Fatalf("setup invocation id = %q", exchanger.request.SetupInvocationID)
+	}
+}
+
+func TestExchangeOIDCCommandForwardsReportedRefAndCommit(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want *api.ReportedContext
+	}{
+		{name: "neither flag sends nothing"},
+		{name: "ref only", args: []string{"--ref", " main "}, want: &api.ReportedContext{Ref: "main"}},
+		{name: "both", args: []string{"--ref", "refs/heads/main", "--commit", "abc123"}, want: &api.ReportedContext{Ref: "refs/heads/main", Commit: "abc123"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			exchanger := &recordingExchanger{}
+			args := append([]string{"auth", "exchange-oidc", "--provider", "manual", "--feed", "your-org/npm", "--purpose", "install"}, test.args...)
+			_, stderr, err := runCommandWithDeps(auth.Dependencies{
+				Env:       mapLookup(map[string]string{"MAZE_OIDC_TOKEN": "manual-oidc"}),
+				Exchanger: exchanger,
+			}, args...)
+			if err != nil {
+				t.Fatalf("command returned error: %v\nstderr: %s", err, stderr)
+			}
+			if !reflect.DeepEqual(exchanger.request.Reported, test.want) {
+				t.Fatalf("reported = %#v, want %#v", exchanger.request.Reported, test.want)
+			}
+		})
+	}
+	_, _, err := runCommandWithDeps(auth.Dependencies{
+		Env:       mapLookup(map[string]string{"MAZE_OIDC_TOKEN": "manual-oidc"}),
+		Exchanger: &recordingExchanger{},
+	}, "auth", "exchange-oidc", "--provider", "manual", "--feed", "your-org/npm", "--purpose", "install", "--commit", "")
+	if err == nil || err.Error() != "--commit must not be empty" {
+		t.Fatalf("err = %v", err)
 	}
 }
 

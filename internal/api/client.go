@@ -33,6 +33,14 @@ type CITokenRequest struct {
 	// Client is an explicit legacy compatibility field. It is caller-supplied,
 	// unverified, and is not PackageMaze Build evidence.
 	Client map[string]any `json:"client,omitempty"`
+	// Reported holds values the job states about itself. PackageMaze shows
+	// them as reported and never uses them in an access rule.
+	Reported *ReportedContext `json:"reported,omitempty"`
+}
+
+type ReportedContext struct {
+	Ref    string `json:"ref,omitempty"`
+	Commit string `json:"commit,omitempty"`
 }
 
 type CITokenResponse struct {

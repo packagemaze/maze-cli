@@ -65,6 +65,7 @@ func newAuthCommand(deps auth.Dependencies) *cobra.Command {
 
 func newExchangeOIDCCommand(deps auth.Dependencies) *cobra.Command {
 	var config auth.Config
+	var reportedRef, reportedCommit string
 	command := &cobra.Command{
 		Use:   "exchange-oidc",
 		Short: "Exchange a CI OIDC identity token for a PackageMaze Token",
@@ -79,6 +80,12 @@ func newExchangeOIDCCommand(deps auth.Dependencies) *cobra.Command {
 				runDeps.Env = auth.DefaultDependencies().Env
 			}
 			runDeps.Stdin = cmd.InOrStdin()
+			if cmd.Flags().Changed("ref") {
+				config.ReportedRef = &reportedRef
+			}
+			if cmd.Flags().Changed("commit") {
+				config.ReportedCommit = &reportedCommit
+			}
 			result, resolved, err := auth.Exchange(cmd.Context(), config, runDeps)
 			if err != nil {
 				return err
@@ -111,6 +118,8 @@ func newExchangeOIDCCommand(deps auth.Dependencies) *cobra.Command {
 	flags.StringVar(&config.OIDCTokenFile, "oidc-token-file", "", "File containing an OIDC token")
 	flags.BoolVar(&config.OIDCTokenStdin, "oidc-token-stdin", false, "Read the OIDC token from stdin")
 	flags.StringVar(&config.SetupInvocationID, "setup-invocation-id", "", "Unverified non-secret wrapper invocation id (default: MAZE_SETUP_INVOCATION_ID)")
+	flags.StringVar(&reportedRef, "ref", "", reportedFlagHelp("git ref"))
+	flags.StringVar(&reportedCommit, "commit", "", reportedFlagHelp("git commit"))
 	flags.StringVar(&config.ClientContextJSON, "client-context-json", "", "Legacy caller-supplied, unverified client metadata JSON accepted for compatibility")
 	flags.StringVar(&config.Format, "format", string(output.FormatToken), "Output format: token, json, shell, or github-output")
 	flags.StringVar(&config.OutputName, "output-name", auth.DefaultOutputName, "Output name when --format github-output")
@@ -124,6 +133,12 @@ func newExchangeOIDCCommand(deps auth.Dependencies) *cobra.Command {
 	_ = command.MarkFlagRequired("feed")
 	_ = command.MarkFlagRequired("purpose")
 	return command
+}
+
+func reportedFlagHelp(value string) string {
+	return "The " + value + " as reported by this job, for platforms that do not sign it; at most 256 characters. " +
+		"PackageMaze shows it as Reported; it is not verified and cannot be used in an access rule. " +
+		"Use only when the platform's setup in PackageMaze asks for it. Needs a PackageMaze server that accepts it; without --ref and --commit the request is unchanged"
 }
 
 func newShowIdentityCommand(deps auth.Dependencies) *cobra.Command {

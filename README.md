@@ -141,6 +141,14 @@ appears in arguments or output. PackageMaze accepts an identity token once, so
 request a fresh one for each exchange. Publishing through `--provider oidc` is
 not supported yet.
 
+Some platforms do not sign the job's git ref or commit. When the platform's
+setup in PackageMaze asks for them, pass the job's own values with
+`--ref <value>` and `--commit <value>` (each trimmed, at most 256 characters).
+The request then carries `"reported": {"ref": ..., "commit": ...}` with only
+the values given. PackageMaze shows them as Reported: they are not verified and
+cannot be used in an access rule. These flags need a PackageMaze server that
+accepts them; without them the request is unchanged.
+
 Required flags:
 
 - `--feed <organization>/<feed>`
