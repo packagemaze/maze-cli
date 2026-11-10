@@ -24,54 +24,79 @@ func TestResolveValidation(t *testing.T) {
 		},
 		{
 			name:    "invalid feed",
-			config:  Config{Provider: "manual", Feed: "missing-slash", Purpose: "install"},
+			config:  Config{Provider: "manual", Feeds: []string{"missing-slash"}, Purpose: "install"},
 			wantErr: "org/feed",
 		},
 		{
+			name:    "feed named twice",
+			config:  Config{Provider: "manual", Feeds: []string{"your-org/npm", "your-org/npm"}, Purpose: "install"},
+			wantErr: "--feed your-org/npm is given twice",
+		},
+		{
+			name:    "more than twenty feeds",
+			config:  Config{Provider: "manual", Feeds: strings.Split(strings.Repeat("your-org/npm ", 20)+"your-org/npm", " "), Purpose: "install"},
+			wantErr: "--feed must be given 1 to 20 times",
+		},
+		{
+			name:    "several feeds to publish",
+			config:  Config{Provider: "manual", Feeds: []string{"your-org/npm", "your-org/pypi"}, Purpose: "publish", Package: "pkg"},
+			wantErr: "only one --feed is supported when --purpose publish",
+		},
+		{
+			name:    "several feeds as shell output",
+			config:  Config{Provider: "manual", Feeds: []string{"your-org/npm", "your-org/pypi"}, Purpose: "install", Format: "shell"},
+			wantErr: "only one --feed is supported when --format shell; use --format token or json",
+		},
+		{
+			name:    "several feeds as GitHub output",
+			config:  Config{Provider: "manual", Feeds: []string{"your-org/npm", "your-org/pypi"}, Purpose: "install", Format: "github-output"},
+			wantErr: "only one --feed is supported when --format github-output; use --format token or json",
+		},
+		{
 			name:    "invalid purpose",
-			config:  Config{Provider: "manual", Feed: "your-org/npm", Purpose: "deploy"},
+			config:  Config{Provider: "manual", Feeds: []string{"your-org/npm"}, Purpose: "deploy"},
 			wantErr: "--purpose",
 		},
 		{
 			name:    "publish missing package",
-			config:  Config{Provider: "manual", Feed: "your-org/npm", Purpose: "publish"},
+			config:  Config{Provider: "manual", Feeds: []string{"your-org/npm"}, Purpose: "publish"},
 			wantErr: "--package is required",
 		},
 		{
 			name:    "package rejected for install",
-			config:  Config{Provider: "manual", Feed: "your-org/npm", Purpose: "install", Package: "pkg"},
+			config:  Config{Provider: "manual", Feeds: []string{"your-org/npm"}, Purpose: "install", Package: "pkg"},
 			wantErr: "only supported",
 		},
 		{
 			name:    "invalid url",
-			config:  Config{Provider: "manual", Feed: "your-org/npm", Purpose: "install", BaseURL: "not-a-url"},
+			config:  Config{Provider: "manual", Feeds: []string{"your-org/npm"}, Purpose: "install", BaseURL: "not-a-url"},
 			wantErr: "absolute URL",
 		},
 		{
 			name:    "http rejected by default",
-			config:  Config{Provider: "manual", Feed: "your-org/npm", Purpose: "install", BaseURL: "http://127.0.0.1:8787"},
+			config:  Config{Provider: "manual", Feeds: []string{"your-org/npm"}, Purpose: "install", BaseURL: "http://127.0.0.1:8787"},
 			wantErr: "must use https",
 		},
 		{
 			name:    "invalid output format",
-			config:  Config{Provider: "manual", Feed: "your-org/npm", Purpose: "install", Format: "yaml"},
+			config:  Config{Provider: "manual", Feeds: []string{"your-org/npm"}, Purpose: "install", Format: "yaml"},
 			wantErr: "format",
 		},
 		{
 			name:    "setup invocation id is too long",
-			config:  Config{Provider: "manual", Feed: "your-org/npm", Purpose: "install", SetupInvocationID: strings.Repeat("a", 161)},
+			config:  Config{Provider: "manual", Feeds: []string{"your-org/npm"}, Purpose: "install", SetupInvocationID: strings.Repeat("a", 161)},
 			wantErr: "--setup-invocation-id",
 		},
 		{
 			name:    "setup invocation id rejects whitespace",
-			config:  Config{Provider: "manual", Feed: "your-org/npm", Purpose: "install", SetupInvocationID: "setup maze 1"},
+			config:  Config{Provider: "manual", Feeds: []string{"your-org/npm"}, Purpose: "install", SetupInvocationID: "setup maze 1"},
 			wantErr: "--setup-invocation-id",
 		},
 		{
 			name: "github output name collides with artifact protocol metadata",
 			config: Config{
 				Provider:   "manual",
-				Feed:       "your-org/npm",
+				Feeds:      []string{"your-org/npm"},
 				Purpose:    "install",
 				Format:     string(output.FormatGitHubOutput),
 				OutputName: "artifact_protocol",
@@ -82,7 +107,7 @@ func TestResolveValidation(t *testing.T) {
 			name: "github output name collides with feed base url metadata",
 			config: Config{
 				Provider:   "manual",
-				Feed:       "your-org/npm",
+				Feeds:      []string{"your-org/npm"},
 				Purpose:    "install",
 				Format:     string(output.FormatGitHubOutput),
 				OutputName: "feed_base_url",
@@ -93,7 +118,7 @@ func TestResolveValidation(t *testing.T) {
 			name: "github output name collides with Build metadata",
 			config: Config{
 				Provider:   "manual",
-				Feed:       "your-org/npm",
+				Feeds:      []string{"your-org/npm"},
 				Purpose:    "install",
 				Format:     string(output.FormatGitHubOutput),
 				OutputName: "build_number",
@@ -104,7 +129,7 @@ func TestResolveValidation(t *testing.T) {
 			name: "github output name collides with Build URL metadata",
 			config: Config{
 				Provider:   "manual",
-				Feed:       "your-org/npm",
+				Feeds:      []string{"your-org/npm"},
 				Purpose:    "install",
 				Format:     string(output.FormatGitHubOutput),
 				OutputName: "build_url",
@@ -125,7 +150,7 @@ func TestResolveValidation(t *testing.T) {
 
 func TestResolveAllowsInsecureLocalhostOnlyWithFlag(t *testing.T) {
 	resolved, err := Resolve(Config{
-		Feed:                   "your-org/npm",
+		Feeds:                  []string{"your-org/npm"},
 		Purpose:                "install",
 		Provider:               "manual",
 		BaseURL:                "http://127.0.0.1:8787",
@@ -142,7 +167,7 @@ func TestResolveAllowsInsecureLocalhostOnlyWithFlag(t *testing.T) {
 func TestExchangeManualEnvTokenCallsBackend(t *testing.T) {
 	exchanger := &recordingExchanger{t: t}
 	result, _, err := Exchange(context.Background(), Config{
-		Feed:     "your-org/npm",
+		Feeds:    []string{"your-org/npm"},
 		Purpose:  "publish",
 		Package:  "your-package",
 		Provider: "manual",
@@ -178,7 +203,7 @@ func TestExchangeManualEnvTokenCallsBackend(t *testing.T) {
 
 func TestResolveSetupInvocationIDFlagPrecedesEnvironment(t *testing.T) {
 	resolved, err := Resolve(Config{
-		Feed:              "your-org/npm",
+		Feeds:             []string{"your-org/npm"},
 		Purpose:           "install",
 		Provider:          "manual",
 		SetupInvocationID: "setup-maze_flag-id",
@@ -195,7 +220,7 @@ func TestResolveSetupInvocationIDFlagPrecedesEnvironment(t *testing.T) {
 
 func TestResolveSetupInvocationIDFromEnvironment(t *testing.T) {
 	resolved, err := Resolve(Config{
-		Feed:     "your-org/npm",
+		Feeds:    []string{"your-org/npm"},
 		Purpose:  "install",
 		Provider: "manual",
 	}, Dependencies{Env: mapLookup(map[string]string{
@@ -212,7 +237,7 @@ func TestResolveSetupInvocationIDFromEnvironment(t *testing.T) {
 func TestExchangeForwardsTypedSetupInvocationID(t *testing.T) {
 	exchanger := &recordingExchanger{t: t}
 	_, _, err := Exchange(context.Background(), Config{
-		Feed:              "your-org/npm",
+		Feeds:             []string{"your-org/npm"},
 		Provider:          "manual",
 		Purpose:           "install",
 		SetupInvocationID: "setup-maze_0123456789abcdef0123456789abcdef",
@@ -232,7 +257,7 @@ func TestExchangeForwardsExplicitLegacyClientContext(t *testing.T) {
 	exchanger := &recordingExchanger{t: t}
 	_, _, err := Exchange(context.Background(), Config{
 		ClientContextJSON: `{"ci":{"run_url":"https://example.com/run/1"}}`,
-		Feed:              "your-org/npm",
+		Feeds:             []string{"your-org/npm"},
 		Provider:          "manual",
 		Purpose:           "install",
 	}, Dependencies{
@@ -254,7 +279,7 @@ func TestExchangeForwardsExplicitLegacyClientContext(t *testing.T) {
 func TestExchangeDoesNotCollectCIEnvironmentAsClientMetadata(t *testing.T) {
 	exchanger := &recordingExchanger{t: t}
 	_, _, err := Exchange(context.Background(), Config{
-		Feed:           "your-org/npm",
+		Feeds:          []string{"your-org/npm"},
 		OIDCTokenStdin: true,
 		Provider:       "github",
 		Purpose:        "install",
@@ -278,7 +303,7 @@ func TestExchangeDoesNotCollectCIEnvironmentAsClientMetadata(t *testing.T) {
 func TestExchangeCollectsCircleCIEnvironmentContext(t *testing.T) {
 	exchanger := &recordingExchanger{t: t}
 	_, _, err := Exchange(context.Background(), Config{
-		Feed:           "your-org/npm",
+		Feeds:          []string{"your-org/npm"},
 		OIDCTokenStdin: true,
 		Provider:       "circleci",
 		Purpose:        "install",
@@ -317,7 +342,7 @@ func TestExchangeRejectsInvalidClientContext(t *testing.T) {
 		t.Run(value, func(t *testing.T) {
 			_, _, err := Exchange(context.Background(), Config{
 				ClientContextJSON: value,
-				Feed:              "your-org/npm",
+				Feeds:             []string{"your-org/npm"},
 				Provider:          "manual",
 				Purpose:           "install",
 			}, Dependencies{
@@ -333,7 +358,7 @@ func TestExchangeRejectsInvalidClientContext(t *testing.T) {
 
 func TestExchangeGitLabMissingTokenPrintsSnippet(t *testing.T) {
 	_, _, err := Exchange(context.Background(), Config{
-		Feed:     "your-org/npm",
+		Feeds:    []string{"your-org/npm"},
 		Purpose:  "install",
 		Provider: "gitlab",
 	}, Dependencies{Env: mapLookup(nil)})
@@ -344,7 +369,7 @@ func TestExchangeGitLabMissingTokenPrintsSnippet(t *testing.T) {
 
 func TestResolveGitHubOutputRequiresActions(t *testing.T) {
 	_, err := Resolve(Config{
-		Feed:     "your-org/npm",
+		Feeds:    []string{"your-org/npm"},
 		Purpose:  "install",
 		Provider: "manual",
 		Format:   string(output.FormatGitHubOutput),
@@ -391,7 +416,7 @@ func mapLookup(values map[string]string) func(string) (string, bool) {
 func TestExchangeOIDCProviderSendsSuppliedTokenAsOIDC(t *testing.T) {
 	exchanger := &recordingExchanger{t: t}
 	_, resolved, err := Exchange(context.Background(), Config{
-		Feed:           "your-org/npm",
+		Feeds:          []string{"your-org/npm"},
 		Purpose:        "install",
 		Provider:       "oidc",
 		OIDCTokenStdin: true,
@@ -424,7 +449,7 @@ func TestExchangeOIDCProviderSendsSuppliedTokenAsOIDC(t *testing.T) {
 func TestExchangeOIDCProviderWithoutTokenSaysWhatToPass(t *testing.T) {
 	exchanger := &recordingExchanger{t: t}
 	_, _, err := Exchange(context.Background(), Config{
-		Feed:     "your-org/npm",
+		Feeds:    []string{"your-org/npm"},
 		Purpose:  "install",
 		Provider: "oidc",
 	}, Dependencies{
@@ -465,7 +490,7 @@ func TestResolveReportedValues(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			resolved, err := Resolve(Config{
-				Provider: "manual", Feed: "your-org/npm", Purpose: "install",
+				Provider: "manual", Feeds: []string{"your-org/npm"}, Purpose: "install",
 				ReportedRef: test.ref, ReportedCommit: test.commit,
 			}, Dependencies{Env: mapLookup(nil)})
 			if test.wantErr != "" {
