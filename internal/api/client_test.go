@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -400,4 +401,41 @@ func loadCITokenContractFixture(t *testing.T) ciTokenContractFixture {
 		t.Fatalf("decode CI token contract fixture: %v", err)
 	}
 	return fixture
+}
+
+func TestClientExchangeCIReportedBody(t *testing.T) {
+	packageName := "your-package"
+	base := CITokenRequest{
+		Provider: "oidc", Feed: "your-org/npm", Purpose: "publish", Package: &packageName,
+		Audience: "https://api.packagemaze.com", OIDCToken: "oidc-fixture", SetupInvocationID: "setup-maze_fixture",
+	}
+	const today = `{"provider":"oidc","feed":"your-org/npm","purpose":"publish","package":"your-package","audience":"https://api.packagemaze.com","oidc_token":"oidc-fixture","setup_invocation_id":"setup-maze_fixture"}`
+	tests := []struct {
+		name     string
+		reported *ReportedContext
+		want     string
+	}{
+		{name: "no reported values keeps today's body", want: today},
+		{name: "ref only", reported: &ReportedContext{Ref: "main"}, want: strings.TrimSuffix(today, "}") + `,"reported":{"ref":"main"}}`},
+		{name: "commit only", reported: &ReportedContext{Commit: "abc123"}, want: strings.TrimSuffix(today, "}") + `,"reported":{"commit":"abc123"}}`},
+		{name: "both", reported: &ReportedContext{Ref: "refs/tags/v1", Commit: "abc123"}, want: strings.TrimSuffix(today, "}") + `,"reported":{"ref":"refs/tags/v1","commit":"abc123"}}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var body []byte
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				body, _ = io.ReadAll(request.Body)
+				_, _ = writer.Write([]byte(`{"token":"maze_ci_fixture","expires_at":"2026-06-08T13:30:00Z"}`))
+			}))
+			defer server.Close()
+			request := base
+			request.Reported = test.reported
+			if _, err := NewClient(server.URL+"/v1", server.Client()).ExchangeCI(context.Background(), request); err != nil {
+				t.Fatalf("ExchangeCI: %v", err)
+			}
+			if string(body) != test.want {
+				t.Fatalf("body =\n%s\nwant\n%s", body, test.want)
+			}
+		})
+	}
 }

@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf16"
 
 	"github.com/packagemaze/maze-cli/internal/api"
 	"github.com/packagemaze/maze-cli/internal/ci"
@@ -22,6 +23,7 @@ const (
 	DefaultOIDCTokenEnv         = "MAZE_OIDC_TOKEN"
 	DefaultOutputName           = "token"
 	DefaultSetupInvocationIDEnv = "MAZE_SETUP_INVOCATION_ID"
+	maxReportedLength           = 256
 )
 
 var (
@@ -41,6 +43,8 @@ type Config struct {
 	OIDCTokenFile            string
 	OIDCTokenStdin           bool
 	SetupInvocationID        string
+	ReportedRef              *string
+	ReportedCommit           *string
 	ClientContextJSON        string
 	Format                   string
 	OutputName               string
@@ -110,6 +114,7 @@ func Exchange(ctx context.Context, config Config, deps Dependencies) (output.Res
 		OIDCToken:         oidcToken,
 		SetupInvocationID: resolved.SetupInvocationID,
 		Client:            clientContext,
+		Reported:          reportedContext(resolved.Config),
 	})
 	if err != nil {
 		return output.Result{}, ResolvedConfig{}, err
@@ -149,6 +154,8 @@ func Resolve(config Config, deps Dependencies) (ResolvedConfig, error) {
 		config.SetupInvocationID,
 		envValue(env, DefaultSetupInvocationIDEnv),
 	)
+	config.ReportedRef = trimmedOptional(config.ReportedRef)
+	config.ReportedCommit = trimmedOptional(config.ReportedCommit)
 	config.OIDCTokenEnv = firstNonEmpty(config.OIDCTokenEnv, DefaultOIDCTokenEnv)
 	config.OutputName = firstNonEmpty(config.OutputName, DefaultOutputName)
 	if config.Timeout == 0 {
@@ -209,6 +216,12 @@ func validateResolved(config ResolvedConfig, env ci.LookupEnv) error {
 	if config.SetupInvocationID != "" && !setupInvocationIDPattern.MatchString(config.SetupInvocationID) {
 		return fmt.Errorf("--setup-invocation-id must be 1-160 letters, numbers, dots, underscores, colons, or hyphens; prefix generated ids with the wrapper name")
 	}
+	if err := validateReported("--ref", config.ReportedRef); err != nil {
+		return err
+	}
+	if err := validateReported("--commit", config.ReportedCommit); err != nil {
+		return err
+	}
 	if config.OIDCTokenFile != "" && config.OIDCTokenStdin {
 		return fmt.Errorf("choose either --oidc-token-file or --oidc-token-stdin, not both")
 	}
@@ -229,6 +242,42 @@ func validateResolved(config ResolvedConfig, env ci.LookupEnv) error {
 		}
 	}
 	return nil
+}
+
+func reportedContext(config Config) *api.ReportedContext {
+	if config.ReportedRef == nil && config.ReportedCommit == nil {
+		return nil
+	}
+	return &api.ReportedContext{Ref: valueOrEmpty(config.ReportedRef), Commit: valueOrEmpty(config.ReportedCommit)}
+}
+
+// validateReported matches the server's limit, which counts UTF-16 code units.
+func validateReported(flag string, value *string) error {
+	if value == nil {
+		return nil
+	}
+	if *value == "" {
+		return fmt.Errorf("%s must not be empty", flag)
+	}
+	if len(utf16.Encode([]rune(*value))) > maxReportedLength {
+		return fmt.Errorf("%s must be at most %d characters", flag, maxReportedLength)
+	}
+	return nil
+}
+
+func trimmedOptional(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*value)
+	return &trimmed
+}
+
+func valueOrEmpty(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func parseClientContext(value string) (map[string]any, error) {

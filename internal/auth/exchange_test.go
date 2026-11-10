@@ -443,3 +443,50 @@ func TestExchangeOIDCProviderWithoutTokenSaysWhatToPass(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveReportedValues(t *testing.T) {
+	text := func(value string) *string { return &value }
+	tests := []struct {
+		name       string
+		ref        *string
+		commit     *string
+		wantErr    string
+		wantRef    *string
+		wantCommit *string
+	}{
+		{name: "neither given"},
+		{name: "values are trimmed", ref: text("  main \n"), commit: text("\tabc123 "), wantRef: text("main"), wantCommit: text("abc123")},
+		{name: "empty ref", ref: text(""), wantErr: "--ref must not be empty"},
+		{name: "whitespace commit", commit: text("  \t"), wantErr: "--commit must not be empty"},
+		{name: "256 characters", ref: text(strings.Repeat("r", 256)), wantRef: text(strings.Repeat("r", 256))},
+		{name: "257 characters", commit: text(strings.Repeat("c", 257)), wantErr: "--commit must be at most 256 characters"},
+		{name: "counted as the server counts", ref: text(strings.Repeat("\U0001F600", 129)), wantErr: "--ref must be at most 256 characters"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			resolved, err := Resolve(Config{
+				Provider: "manual", Feed: "your-org/npm", Purpose: "install",
+				ReportedRef: test.ref, ReportedCommit: test.commit,
+			}, Dependencies{Env: mapLookup(nil)})
+			if test.wantErr != "" {
+				if err == nil || err.Error() != test.wantErr {
+					t.Fatalf("err = %v, want %q", err, test.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Resolve: %v", err)
+			}
+			if !equalOptional(resolved.ReportedRef, test.wantRef) || !equalOptional(resolved.ReportedCommit, test.wantCommit) {
+				t.Fatalf("reported = %v, %v", resolved.ReportedRef, resolved.ReportedCommit)
+			}
+		})
+	}
+}
+
+func equalOptional(got *string, want *string) bool {
+	if got == nil || want == nil {
+		return got == want
+	}
+	return *got == *want
+}
