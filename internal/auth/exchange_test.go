@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/packagemaze/maze-cli/internal/api"
+	"github.com/packagemaze/maze-cli/internal/ci"
 	"github.com/packagemaze/maze-cli/internal/output"
 )
 
@@ -384,5 +385,61 @@ func mapLookup(values map[string]string) func(string) (string, bool) {
 	return func(key string) (string, bool) {
 		value, ok := values[key]
 		return value, ok
+	}
+}
+
+func TestExchangeOIDCProviderSendsSuppliedTokenAsOIDC(t *testing.T) {
+	exchanger := &recordingExchanger{t: t}
+	_, resolved, err := Exchange(context.Background(), Config{
+		Feed:           "your-org/npm",
+		Purpose:        "install",
+		Provider:       "oidc",
+		OIDCTokenStdin: true,
+	}, Dependencies{
+		// A detected CI must not override an explicit --provider oidc.
+		Env:       mapLookup(map[string]string{"GITHUB_ACTIONS": "true"}),
+		Stdin:     strings.NewReader("platform-identity\n"),
+		Exchanger: exchanger,
+	})
+	if err != nil {
+		t.Fatalf("Exchange returned error: %v", err)
+	}
+	if exchanger.request.Provider != "oidc" {
+		t.Fatalf("provider = %q", exchanger.request.Provider)
+	}
+	if exchanger.request.OIDCToken != "platform-identity" {
+		t.Fatalf("oidc token = %q", exchanger.request.OIDCToken)
+	}
+	if exchanger.request.Audience != "https://api.packagemaze.com" {
+		t.Fatalf("audience = %q", exchanger.request.Audience)
+	}
+	if exchanger.request.Client != nil {
+		t.Fatalf("client context = %#v", exchanger.request.Client)
+	}
+	if resolved.ProviderValue != ci.ProviderOIDC {
+		t.Fatalf("resolved provider = %q", resolved.ProviderValue)
+	}
+}
+
+func TestExchangeOIDCProviderWithoutTokenSaysWhatToPass(t *testing.T) {
+	exchanger := &recordingExchanger{t: t}
+	_, _, err := Exchange(context.Background(), Config{
+		Feed:     "your-org/npm",
+		Purpose:  "install",
+		Provider: "oidc",
+	}, Dependencies{
+		Env:       mapLookup(map[string]string{}),
+		Exchanger: exchanger,
+	})
+	if err == nil {
+		t.Fatalf("expected an error")
+	}
+	if exchanger.called {
+		t.Fatalf("backend was called without a token")
+	}
+	for _, want := range []string{"https://api.packagemaze.com", "--oidc-token-stdin", "MAZE_OIDC_TOKEN"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q does not mention %q", err.Error(), want)
+		}
 	}
 }

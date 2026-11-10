@@ -297,7 +297,7 @@ func resolveProvider(config Config, env ci.LookupEnv) (ci.Provider, error) {
 		return ci.ProviderManual, nil
 	}
 	return "", fmt.Errorf(`No CI provider was detected and no OIDC token was supplied.
-Run inside GitHub Actions, GitLab CI/CD, or CircleCI, or pass a token with --oidc-token-stdin, --oidc-token-file, or %s.`, config.OIDCTokenEnv)
+Run inside GitHub Actions, GitLab CI/CD, or CircleCI. On another platform, pass --provider oidc and its identity token with --oidc-token-stdin, --oidc-token-file, or %s.`, config.OIDCTokenEnv)
 }
 
 func acquireOIDCToken(ctx context.Context, config ResolvedConfig, deps Dependencies) (string, error) {
@@ -333,6 +333,12 @@ id_tokens:
 			return token, nil
 		}
 		return ci.RequestCircleCIToken(ctx, config.Audience, deps.LookPath, deps.CommandRunner)
+	case ci.ProviderOIDC:
+		if token, _, ok := ci.ReadTokenEnv(env, config.OIDCTokenEnv, "PACKAGEMAZE_OIDC_TOKEN"); ok {
+			return token, nil
+		}
+		return "", fmt.Errorf(`--provider oidc needs the identity token your platform issued to this job.
+Request it for audience %s, then pass it with --oidc-token-stdin, --oidc-token-file, or %s.`, config.Audience, config.OIDCTokenEnv)
 	case ci.ProviderManual:
 		if token, _, ok := ci.ReadTokenEnv(env, config.OIDCTokenEnv, "PACKAGEMAZE_OIDC_TOKEN"); ok {
 			return token, nil
@@ -340,7 +346,7 @@ id_tokens:
 		return "", fmt.Errorf(`Manual OIDC token exchange requires a token.
 Pass one with --oidc-token-stdin, --oidc-token-file, or %s.`, config.OIDCTokenEnv)
 	default:
-		return "", fmt.Errorf("provider must be auto, github, gitlab, circleci, or manual")
+		return "", fmt.Errorf("provider must be auto, github, gitlab, circleci, oidc, or manual")
 	}
 }
 
