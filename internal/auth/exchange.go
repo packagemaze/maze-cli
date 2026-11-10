@@ -24,6 +24,7 @@ const (
 	DefaultOutputName           = "token"
 	DefaultSetupInvocationIDEnv = "MAZE_SETUP_INVOCATION_ID"
 	maxReportedLength           = 256
+	maxFeeds                    = 20
 )
 
 var (
@@ -34,7 +35,7 @@ var (
 type Config struct {
 	BaseURL                  string
 	APIURL                   string
-	Feed                     string
+	Feeds                    []string
 	Purpose                  string
 	Package                  string
 	Provider                 string
@@ -105,9 +106,8 @@ func Exchange(ctx context.Context, config Config, deps Dependencies) (output.Res
 		}
 		exchanger = api.NewClient(resolved.APIURL, httpClient)
 	}
-	response, err := exchanger.ExchangeCI(ctx, api.CITokenRequest{
+	request := api.CITokenRequest{
 		Provider:          string(resolved.ProviderValue),
-		Feed:              resolved.Feed,
 		Purpose:           resolved.Purpose,
 		Package:           requestPackage,
 		Audience:          resolved.Audience,
@@ -115,7 +115,13 @@ func Exchange(ctx context.Context, config Config, deps Dependencies) (output.Res
 		SetupInvocationID: resolved.SetupInvocationID,
 		Client:            clientContext,
 		Reported:          reportedContext(resolved.Config),
-	})
+	}
+	if len(resolved.Feeds) == 1 {
+		request.Feed = resolved.Feeds[0]
+	} else {
+		request.Feeds = resolved.Feeds
+	}
+	response, err := exchanger.ExchangeCI(ctx, request)
 	if err != nil {
 		return output.Result{}, ResolvedConfig{}, err
 	}
@@ -123,7 +129,7 @@ func Exchange(ctx context.Context, config Config, deps Dependencies) (output.Res
 		Token:            response.Token,
 		ExpiresAt:        response.ExpiresAt,
 		TokenType:        response.TokenType,
-		Feed:             fallback(response.Feed, resolved.Feed),
+		Feed:             fallback(response.Feed, request.Feed),
 		FeedBaseURL:      response.FeedBaseURL,
 		Purpose:          fallback(response.ExchangePurpose, resolved.Purpose),
 		BuildNumber:      response.BuildNumber,
@@ -132,6 +138,7 @@ func Exchange(ctx context.Context, config Config, deps Dependencies) (output.Res
 		Scopes:           response.Scopes,
 		Provider:         string(resolved.ProviderValue),
 		ArtifactProtocol: response.ArtifactProtocol,
+		Feeds:            response.Feeds,
 	}, resolved, nil
 }
 
@@ -171,8 +178,8 @@ func Resolve(config Config, deps Dependencies) (ResolvedConfig, error) {
 }
 
 func validateResolved(config ResolvedConfig, env ci.LookupEnv) error {
-	if _, _, ok := endpoint.SplitFeedSlug(config.Feed); !ok {
-		return fmt.Errorf("--feed must be in org/feed form")
+	if err := validateFeeds(config); err != nil {
+		return err
 	}
 	switch strings.TrimSpace(config.Purpose) {
 	case "install", "publish", "docker-build", "test":
@@ -218,6 +225,34 @@ func validateResolved(config ResolvedConfig, env ci.LookupEnv) error {
 		if !inGitHubActions && !config.AllowGitHubOutputOutside && !envEqualsTrue(env, "MAZE_ALLOW_GITHUB_OUTPUT_OUTSIDE_ACTIONS") {
 			return fmt.Errorf("--format github-output is only supported inside GitHub Actions")
 		}
+	}
+	return nil
+}
+
+// validateFeeds refuses what needs no server to refuse; PackageMaze checks the
+// rest, such as Feeds in two Organizations.
+func validateFeeds(config ResolvedConfig) error {
+	if len(config.Feeds) == 0 || len(config.Feeds) > maxFeeds {
+		return fmt.Errorf("--feed must be given 1 to %d times", maxFeeds)
+	}
+	seen := map[string]bool{}
+	for _, feed := range config.Feeds {
+		if _, _, ok := endpoint.SplitFeedSlug(feed); !ok {
+			return fmt.Errorf("--feed must be in org/feed form")
+		}
+		if seen[feed] {
+			return fmt.Errorf("--feed %s is given twice", feed)
+		}
+		seen[feed] = true
+	}
+	if len(config.Feeds) == 1 {
+		return nil
+	}
+	if config.Purpose == "publish" {
+		return fmt.Errorf("only one --feed is supported when --purpose publish")
+	}
+	if config.FormatValue == output.FormatShell || config.FormatValue == output.FormatGitHubOutput {
+		return fmt.Errorf("only one --feed is supported when --format %s; use --format token or json", config.FormatValue)
 	}
 	return nil
 }

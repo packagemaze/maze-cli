@@ -63,7 +63,7 @@ func TestGitHubOIDCRetryDoesNotReplayExchange(t *testing.T) {
 				}
 				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"value":"github-oidc-token"}`)), Header: make(http.Header)}, nil
 			})}
-			_, _, err := Exchange(context.Background(), Config{Feed: "your-org/npm", Purpose: "install", Provider: "github"}, Dependencies{
+			_, _, err := Exchange(context.Background(), Config{Feeds: []string{"your-org/npm"}, Purpose: "install", Provider: "github"}, Dependencies{
 				Env: mapLookup(map[string]string{
 					"ACTIONS_ID_TOKEN_REQUEST_URL":   "https://github.example/token",
 					"ACTIONS_ID_TOKEN_REQUEST_TOKEN": "runtime-token",

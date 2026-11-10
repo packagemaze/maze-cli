@@ -31,6 +31,9 @@ type Result struct {
 	Scopes           []string
 	Provider         string
 	ArtifactProtocol string
+	// Feeds is PackageMaze's answer for several Feeds, in place of Feed,
+	// FeedBaseURL, and ArtifactProtocol.
+	Feeds json.RawMessage
 }
 
 type WriteConfig struct {
@@ -80,18 +83,19 @@ func Write(result Result, config WriteConfig) error {
 
 func writeJSON(writer io.Writer, result Result) error {
 	payload := struct {
-		Token            string   `json:"token"`
-		ExpiresAt        string   `json:"expires_at"`
-		TokenType        string   `json:"token_type"`
-		Feed             string   `json:"feed"`
-		FeedBaseURL      string   `json:"feed_base_url,omitempty"`
-		Purpose          string   `json:"purpose"`
-		BuildNumber      int64    `json:"build_number,omitempty"`
-		BuildURL         string   `json:"build_url,omitempty"`
-		Package          string   `json:"package,omitempty"`
-		Scopes           []string `json:"scopes"`
-		Provider         string   `json:"provider"`
-		ArtifactProtocol string   `json:"artifact_protocol,omitempty"`
+		Token            string          `json:"token"`
+		ExpiresAt        string          `json:"expires_at"`
+		TokenType        string          `json:"token_type"`
+		Feed             string          `json:"feed,omitempty"`
+		FeedBaseURL      string          `json:"feed_base_url,omitempty"`
+		Purpose          string          `json:"purpose"`
+		BuildNumber      int64           `json:"build_number,omitempty"`
+		BuildURL         string          `json:"build_url,omitempty"`
+		Package          string          `json:"package,omitempty"`
+		Scopes           []string        `json:"scopes"`
+		Provider         string          `json:"provider"`
+		ArtifactProtocol string          `json:"artifact_protocol,omitempty"`
+		Feeds            json.RawMessage `json:"feeds,omitempty"`
 	}{
 		Token:            result.Token,
 		ExpiresAt:        result.ExpiresAt.UTC().Format(time.RFC3339),
@@ -105,6 +109,7 @@ func writeJSON(writer io.Writer, result Result) error {
 		Scopes:           result.Scopes,
 		Provider:         result.Provider,
 		ArtifactProtocol: result.ArtifactProtocol,
+		Feeds:            result.Feeds,
 	}
 	encoder := json.NewEncoder(writer)
 	encoder.SetIndent("", "  ")

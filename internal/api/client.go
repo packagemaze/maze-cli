@@ -24,7 +24,7 @@ type Client struct {
 
 type CITokenRequest struct {
 	Provider          string  `json:"provider"`
-	Feed              string  `json:"feed"`
+	Feed              string  `json:"feed,omitempty"`
 	Purpose           string  `json:"purpose"`
 	Package           *string `json:"package"`
 	Audience          string  `json:"audience"`
@@ -36,6 +36,9 @@ type CITokenRequest struct {
 	// Reported holds values the job states about itself. PackageMaze shows
 	// them as reported and never uses them in an access rule.
 	Reported *ReportedContext `json:"reported,omitempty"`
+	// Feeds names several Feeds of one Organization in place of Feed. It needs
+	// a PackageMaze server that accepts it.
+	Feeds []string `json:"feeds,omitempty"`
 }
 
 type ReportedContext struct {
@@ -54,6 +57,9 @@ type CITokenResponse struct {
 	BuildURL         string
 	Scopes           []string
 	ArtifactProtocol string
+	// Feeds is PackageMaze's answer to a Feeds request, one entry per Feed, in
+	// place of Feed, FeedBaseURL, and ArtifactProtocol.
+	Feeds json.RawMessage
 }
 
 type StatusError struct {
@@ -199,23 +205,24 @@ func (c *Client) ExchangeCI(ctx context.Context, request CITokenRequest) (CIToke
 			SignInID:   redactSecret(detail.SignInID, request.OIDCToken),
 			DetailsURL: redactSecret(detail.DetailsURL, request.OIDCToken),
 			Provider:   request.Provider,
-			Feed:       request.Feed,
+			Feed:       request.Feed + strings.Join(request.Feeds, ", "),
 			Purpose:    request.Purpose,
 		}
 	}
 
 	var payload struct {
-		Token            string   `json:"token"`
-		ExpiresAt        string   `json:"expires_at"`
-		TokenType        string   `json:"token_type"`
-		Feed             string   `json:"feed"`
-		FeedBaseURL      string   `json:"feed_base_url"`
-		Purpose          string   `json:"purpose"`
-		ExchangePurpose  string   `json:"exchange_purpose"`
-		BuildNumber      int64    `json:"build_number"`
-		BuildURL         string   `json:"build_url"`
-		Scopes           []string `json:"scopes"`
-		ArtifactProtocol string   `json:"artifact_protocol"`
+		Token            string          `json:"token"`
+		ExpiresAt        string          `json:"expires_at"`
+		TokenType        string          `json:"token_type"`
+		Feed             string          `json:"feed"`
+		FeedBaseURL      string          `json:"feed_base_url"`
+		Purpose          string          `json:"purpose"`
+		ExchangePurpose  string          `json:"exchange_purpose"`
+		BuildNumber      int64           `json:"build_number"`
+		BuildURL         string          `json:"build_url"`
+		Scopes           []string        `json:"scopes"`
+		ArtifactProtocol string          `json:"artifact_protocol"`
+		Feeds            json.RawMessage `json:"feeds"`
 	}
 	if err := json.NewDecoder(io.LimitReader(response.Body, 1024*1024)).Decode(&payload); err != nil {
 		return CITokenResponse{}, &MalformedResponseError{Endpoint: endpoint, Err: err}
@@ -254,6 +261,7 @@ func (c *Client) ExchangeCI(ctx context.Context, request CITokenRequest) (CIToke
 		BuildURL:         payload.BuildURL,
 		Scopes:           payload.Scopes,
 		ArtifactProtocol: payload.ArtifactProtocol,
+		Feeds:            payload.Feeds,
 	}, nil
 }
 

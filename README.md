@@ -149,9 +149,25 @@ the values given. PackageMaze shows them as Reported: they are not verified and
 cannot be used in an access rule. These flags need a PackageMaze server that
 accepts them; without them the request is unchanged.
 
+To install from several Feeds of one Organization, repeat `--feed` (up to 20
+times) and sign in once:
+
+```sh
+maze auth exchange-oidc \
+  --feed <organization>/<feed> \
+  --feed <organization>/<another-feed> \
+  --purpose install
+```
+
+One Token covers all of them. `--format json` carries PackageMaze's `feeds`
+list (`feed`, `feed_base_url`, and `artifact_protocol` for each Feed) in place
+of the single-Feed fields. `--format shell`, `--format github-output`, and
+`--purpose publish` take one Feed. Several Feeds need a PackageMaze server that
+accepts them.
+
 Required flags:
 
-- `--feed <organization>/<feed>`
+- `--feed <organization>/<feed>`, repeatable
 - `--purpose {install | publish | docker-build | test}`
 
 Publishing also requires:
