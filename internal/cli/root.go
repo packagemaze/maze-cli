@@ -62,6 +62,7 @@ func newAuthCommand(deps auth.Dependencies) *cobra.Command {
 	authCommand.AddCommand(newLoginCommand(deps, login.DefaultDependencies()))
 	authCommand.AddCommand(newExchangeOIDCCommand(deps))
 	authCommand.AddCommand(newShowIdentityCommand(deps))
+	authCommand.AddCommand(newAuthExecCommand(deps, defaultExecDependencies()))
 	return authCommand
 }
 
@@ -70,14 +71,20 @@ func newExchangeOIDCCommand(deps auth.Dependencies) *cobra.Command {
 	var reportedRef, reportedCommit string
 	command := &cobra.Command{
 		Use:   "exchange-oidc",
-		Short: "Exchange a CI OIDC identity token for a PackageMaze Token",
-		Long: "Exchange a CI OIDC identity token for a short-lived PackageMaze Token.\n\n" +
-			"The command supports GitHub Actions and CircleCI, and any other platform PackageMaze has an OIDC access rule for: request that platform's identity token for the PackageMaze audience and pass it with --provider oidc. Manual token input is for local development. GitLab token input is recognized for forward compatibility, but PackageMaze does not yet accept GitLab identities in production.",
+		Short: "Exchange a workload identity token for a PackageMaze Token",
+		Long: "Exchange the job's workload identity token for a short-lived PackageMaze Token.\n\n" +
+			"On GitHub Actions and CircleCI, maze requests the job's identity token itself and names that platform. " +
+			"On any other platform PackageMaze has an access rule for, request the platform's identity token for the PackageMaze audience and pass it with --identity-token-stdin, --identity-token-file, or an environment variable; maze names no provider, so the token's issuer selects one. " +
+			"When the platform adds the identity token to the request itself, pass --identity-token-injected. --provider manual is for local development only.",
 		Example: "  maze auth exchange-oidc --feed your-org/your-feed --purpose install --format github-output\n" +
 			"  maze auth exchange-oidc --feed your-org/your-feed --purpose publish --format github-output" + "\n" +
-			"  your-platform-token-command | maze auth exchange-oidc --provider oidc --oidc-token-stdin --feed your-org/your-feed --purpose install\n" +
+			"  your-platform-token-command | maze auth exchange-oidc --identity-token-stdin --feed your-org/your-feed --purpose install\n" +
+			"  maze auth exchange-oidc --identity-token-injected --feed your-org/your-feed --purpose install\n" +
 			"  maze auth exchange-oidc --feed your-org/npm --feed your-org/pypi --purpose install",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := checkIdentityTokenAliases(cmd); err != nil {
+				return err
+			}
 			runDeps := deps
 			if runDeps.Env == nil {
 				runDeps.Env = auth.DefaultDependencies().Env
@@ -94,7 +101,7 @@ func newExchangeOIDCCommand(deps auth.Dependencies) *cobra.Command {
 				return err
 			}
 			if resolved.Verbose {
-				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "PackageMaze OIDC exchange provider: %s\n", resolved.ProviderValue)
+				_, _ = fmt.Fprint(cmd.ErrOrStderr(), providerDiagnostic(resolved, result.Provider))
 			}
 			githubOutputPath := ""
 			if value, ok := runDeps.Env("GITHUB_OUTPUT"); ok {
@@ -109,20 +116,26 @@ func newExchangeOIDCCommand(deps auth.Dependencies) *cobra.Command {
 			})
 		},
 	}
+	bindExchangeFlags(command, &config, &reportedRef, &reportedCommit)
+	return command
+}
+
+// bindExchangeFlags registers the flags every command that exchanges an
+// identity token for a PackageMaze Token shares.
+func bindExchangeFlags(command *cobra.Command, config *auth.Config, reportedRef *string, reportedCommit *string) {
 	flags := command.Flags()
 	flags.StringVar(&config.BaseURL, "base-url", "", "PackageMaze API Domain base URL (default: MAZE_BASE_URL, else https://api.packagemaze.com)")
 	flags.StringVar(&config.APIURL, "api-url", "", "Full PackageMaze API root URL override (default: {base-url}/v1)")
-	flags.StringArrayVar(&config.Feeds, "feed", nil, "PackageMaze Feed in `org/feed` form. Repeat it, up to 20 times, to get one Token for several Feeds of one Organization: not with --purpose publish, and with --format token or json only")
+	flags.StringArrayVar(&config.Feeds, "feed", nil, "PackageMaze Feed in `org/feed` form. Repeat it, up to 20 times, to get one Token for several Feeds of one Organization; not with --purpose publish")
 	flags.StringVar(&config.Purpose, "purpose", "", "Token request purpose: install, publish, docker-build, or test")
 	flags.StringVar(&config.Package, "package", "", "Package name, accepted with --purpose publish only. Optional: it has no effect on what the Token may publish")
-	flags.StringVar(&config.Provider, "provider", "auto", "CI provider: auto, github, gitlab, circleci, oidc, or manual. Use oidc for any other platform PackageMaze has an OIDC access rule for, with a supplied token")
+	flags.StringVar(&config.Provider, "provider", "auto", providerFlagHelp)
 	flags.StringVar(&config.Audience, "audience", "", "OIDC audience to request or expect (default: {base-url})")
-	flags.StringVar(&config.OIDCTokenEnv, "oidc-token-env", auth.DefaultOIDCTokenEnv, "Environment variable containing an OIDC token")
-	flags.StringVar(&config.OIDCTokenFile, "oidc-token-file", "", "File containing an OIDC token")
-	flags.BoolVar(&config.OIDCTokenStdin, "oidc-token-stdin", false, "Read the OIDC token from stdin")
+	bindIdentityTokenFlags(command, &config.OIDCTokenEnv, &config.OIDCTokenFile, &config.OIDCTokenStdin)
+	flags.BoolVar(&config.IdentityInjected, "identity-token-injected", false, "The platform adds this job's identity token to the exchange request as an Authorization Bearer header, so maze sends none and names no provider")
 	flags.StringVar(&config.SetupInvocationID, "setup-invocation-id", "", "Unverified non-secret wrapper invocation id (default: MAZE_SETUP_INVOCATION_ID)")
-	flags.StringVar(&reportedRef, "ref", "", reportedFlagHelp("git ref"))
-	flags.StringVar(&reportedCommit, "commit", "", reportedFlagHelp("git commit"))
+	flags.StringVar(reportedRef, "ref", "", reportedFlagHelp("git ref"))
+	flags.StringVar(reportedCommit, "commit", "", reportedFlagHelp("git commit"))
 	flags.StringVar(&config.ClientContextJSON, "client-context-json", "", "Legacy caller-supplied, unverified client metadata JSON accepted for compatibility")
 	flags.StringVar(&config.Format, "format", string(output.FormatToken), "Output format: token, json, shell, or github-output")
 	flags.StringVar(&config.OutputName, "output-name", auth.DefaultOutputName, "Output name when --format github-output")
@@ -135,7 +148,20 @@ func newExchangeOIDCCommand(deps auth.Dependencies) *cobra.Command {
 	_ = flags.MarkHidden("allow-github-output-outside-actions")
 	_ = command.MarkFlagRequired("feed")
 	_ = command.MarkFlagRequired("purpose")
-	return command
+}
+
+const providerFlagHelp = "Provider to name: auto, github, circleci, oidc, or manual. auto names github or circleci only when maze requests the identity token from that platform itself, and otherwise lets the token's issuer select one; manual is for local development only"
+
+// providerDiagnostic says which provider the exchange named, and why it named
+// none.
+func providerDiagnostic(resolved auth.ResolvedConfig, provider string) string {
+	if resolved.IdentityInjected {
+		return "PackageMaze OIDC exchange provider: none named; the platform added the identity token to the request, and its issuer selects the provider\n"
+	}
+	if provider == "" {
+		return "PackageMaze OIDC exchange provider: none named; the supplied identity token's issuer selects it\n"
+	}
+	return fmt.Sprintf("PackageMaze OIDC exchange provider: %s\n", provider)
 }
 
 func reportedFlagHelp(value string) string {
@@ -154,10 +180,13 @@ func newShowIdentityCommand(deps auth.Dependencies) *cobra.Command {
 		Long: "Obtain this job's identity token exactly as exchange-oidc does, decode it locally, and print the claims it carries, so a platform can be set up in PackageMaze without failing a run first.\n\n" +
 			"The token is not verified and nothing is sent to PackageMaze. Every claim value the token carries is printed to the job log; the token itself and its signature are never printed.",
 		Example: "  maze auth show-identity\n" +
-			"  your-platform-token-command | maze auth show-identity --provider oidc --oidc-token-stdin\n" +
+			"  your-platform-token-command | maze auth show-identity --identity-token-stdin\n" +
 			"  maze auth show-identity --format json",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := checkIdentityTokenAliases(cmd); err != nil {
+				return err
+			}
 			formatValue, err := parseIdentityFormat(format, jsonAlias)
 			if err != nil {
 				return err
@@ -187,11 +216,9 @@ func newShowIdentityCommand(deps auth.Dependencies) *cobra.Command {
 	}
 	flags := command.Flags()
 	flags.StringVar(&config.BaseURL, "base-url", "", "PackageMaze API Domain base URL; sets the default audience (default: MAZE_BASE_URL, else https://api.packagemaze.com)")
-	flags.StringVar(&config.Provider, "provider", "auto", "CI provider: auto, github, gitlab, circleci, oidc, or manual. Use oidc for any other platform, with a supplied token")
+	flags.StringVar(&config.Provider, "provider", "auto", "Where to obtain the identity token: auto, github, circleci, oidc, or manual. auto requests it from GitHub Actions or CircleCI, else reads a supplied token")
 	flags.StringVar(&config.Audience, "audience", "", "OIDC audience to request (default: {base-url})")
-	flags.StringVar(&config.OIDCTokenEnv, "oidc-token-env", auth.DefaultOIDCTokenEnv, "Environment variable containing an OIDC token")
-	flags.StringVar(&config.OIDCTokenFile, "oidc-token-file", "", "File containing an OIDC token")
-	flags.BoolVar(&config.OIDCTokenStdin, "oidc-token-stdin", false, "Read the OIDC token from stdin")
+	bindIdentityTokenFlags(command, &config.OIDCTokenEnv, &config.OIDCTokenFile, &config.OIDCTokenStdin)
 	flags.StringVar(&format, "format", "text", "Output format: text or json")
 	flags.BoolVar(&jsonAlias, "json", false, "Alias for --format json")
 	flags.BoolVar(&config.AllowInsecureLocalhost, "allow-insecure-localhost", false, "Allow http URLs only for localhost development")

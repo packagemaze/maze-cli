@@ -23,13 +23,17 @@ type Client struct {
 }
 
 type CITokenRequest struct {
-	Provider          string  `json:"provider"`
-	Feed              string  `json:"feed,omitempty"`
-	Purpose           string  `json:"purpose"`
-	Package           *string `json:"package"`
-	Audience          string  `json:"audience"`
-	OIDCToken         string  `json:"oidc_token"`
-	SetupInvocationID string  `json:"setup_invocation_id,omitempty"`
+	// Provider is omitted, never null, when empty: PackageMaze then lets the
+	// identity token's issuer select the verifier, and refuses a null.
+	Provider string  `json:"provider,omitempty"`
+	Feed     string  `json:"feed,omitempty"`
+	Purpose  string  `json:"purpose"`
+	Package  *string `json:"package"`
+	Audience string  `json:"audience"`
+	// OIDCToken is omitted when the platform adds the identity token to the
+	// request as an Authorization Bearer header; PackageMaze reads it there.
+	OIDCToken         string `json:"oidc_token,omitempty"`
+	SetupInvocationID string `json:"setup_invocation_id,omitempty"`
 	// Client is an explicit legacy compatibility field. It is caller-supplied,
 	// unverified, and is not PackageMaze Build evidence.
 	Client map[string]any `json:"client,omitempty"`
@@ -89,7 +93,11 @@ func (e *StatusError) Error() string {
 		recovery = fmt.Sprintf("\nPackageMaze suggests:\n  %s", strings.TrimSpace(e.Recovery))
 	}
 	if e.StatusCode == http.StatusUnauthorized || e.StatusCode == http.StatusForbidden {
-		refusal := fmt.Sprintf(`PackageMaze rejected this CI identity.
+		provider := strings.TrimSpace(e.Provider)
+		if provider == "" {
+			provider = "none named; the identity token's issuer selects it"
+		}
+		refusal := fmt.Sprintf(`PackageMaze rejected this workload identity.
 Feed:
   %s
 Provider:
@@ -97,14 +105,14 @@ Provider:
 Purpose:
   %s
 The backend said:
-  %s%s%s`, e.Feed, e.Provider, e.Purpose, detail, code, recovery)
+  %s%s%s`, e.Feed, provider, e.Purpose, detail, code, recovery)
 		if detailsURL, ok := httpsURL(e.DetailsURL); ok {
 			return refusal + "\n" + refusalDetails(detailsURL, e.SignInID)
 		}
 		return refusal + `
 Check:
-  - the CI trust rule configured for this Feed
-  - the workflow, branch, or tag rule
+  - the access rule on this Feed and what it requires of the identity
+  - the platform that issued the identity token, and its audience
   - the PackageMaze Feed name`
 	}
 	if e.StatusCode >= 500 {

@@ -18,7 +18,6 @@ type Provider string
 const (
 	ProviderAuto     Provider = "auto"
 	ProviderGitHub   Provider = "github"
-	ProviderGitLab   Provider = "gitlab"
 	ProviderCircleCI Provider = "circleci"
 	ProviderOIDC     Provider = "oidc"
 	ProviderManual   Provider = "manual"
@@ -47,23 +46,22 @@ func ParseProvider(value string) (Provider, error) {
 	switch normalized {
 	case "", ProviderAuto:
 		return ProviderAuto, nil
-	case ProviderGitHub, ProviderGitLab, ProviderCircleCI, ProviderOIDC, ProviderManual:
+	case ProviderGitHub, ProviderCircleCI, ProviderOIDC, ProviderManual:
 		return normalized, nil
 	default:
-		return "", fmt.Errorf("provider must be auto, github, gitlab, circleci, oidc, or manual")
+		return "", fmt.Errorf("provider must be auto, github, circleci, oidc, or manual")
 	}
 }
 
+// DetectProvider finds the built-in platform this job runs on: one whose own
+// mechanism maze can request the job's identity token from.
 func DetectProvider(env LookupEnv) (Provider, bool, error) {
 	if env == nil {
 		env = DefaultLookupEnv
 	}
-	detected := make([]Provider, 0, 3)
+	detected := make([]Provider, 0, 2)
 	if envEqualsTrue(env, "GITHUB_ACTIONS") {
 		detected = append(detected, ProviderGitHub)
-	}
-	if envEqualsTrue(env, "GITLAB_CI") {
-		detected = append(detected, ProviderGitLab)
 	}
 	if envEqualsTrue(env, "CIRCLECI") {
 		detected = append(detected, ProviderCircleCI)
@@ -76,7 +74,7 @@ func DetectProvider(env LookupEnv) (Provider, bool, error) {
 		for _, provider := range detected {
 			names = append(names, string(provider))
 		}
-		return "", true, fmt.Errorf("multiple CI providers were detected (%s); pass --provider to choose one", strings.Join(names, ", "))
+		return "", true, fmt.Errorf("multiple built-in platforms were detected (%s); pass --provider to choose one", strings.Join(names, ", "))
 	}
 	return detected[0], true, nil
 }
@@ -135,9 +133,9 @@ func splitEnvironmentList(value string) []string {
 func ReadTokenFile(path string) (string, error) {
 	content, err := os.ReadFile(path)
 	if err != nil {
-		return "", fmt.Errorf("read OIDC token file: %w", err)
+		return "", fmt.Errorf("read identity token file: %w", err)
 	}
-	return cleanToken(string(content), "OIDC token file")
+	return cleanToken(string(content), "identity token file")
 }
 
 func ReadTokenStdin(stdin io.Reader) (string, error) {
@@ -146,7 +144,7 @@ func ReadTokenStdin(stdin io.Reader) (string, error) {
 	}
 	content, err := io.ReadAll(io.LimitReader(stdin, 1024*1024))
 	if err != nil {
-		return "", fmt.Errorf("read OIDC token from stdin: %w", err)
+		return "", fmt.Errorf("read identity token from stdin: %w", err)
 	}
 	return cleanToken(string(content), "stdin")
 }
@@ -251,10 +249,10 @@ func RequestCircleCIToken(
 func cleanToken(value string, source string) (string, error) {
 	token := strings.TrimSpace(value)
 	if token == "" {
-		return "", fmt.Errorf("%s did not contain an OIDC token", source)
+		return "", fmt.Errorf("%s did not contain an identity token", source)
 	}
 	if strings.ContainsAny(token, "\r\n") {
-		return "", fmt.Errorf("%s contained multiple lines; expected one OIDC token", source)
+		return "", fmt.Errorf("%s contained multiple lines; expected one identity token", source)
 	}
 	return token, nil
 }

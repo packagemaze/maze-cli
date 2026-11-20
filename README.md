@@ -19,7 +19,9 @@ The implemented commands are:
 
 ```sh
 maze doctor
+maze auth login --org <organization>
 maze auth exchange-oidc
+maze auth exec -- <command>
 maze auth show-identity
 maze publish dist/* --feed <organization>/<feed>
 ```
@@ -29,9 +31,11 @@ maze publish dist/* --feed <organization>/<feed>
 browser, waits while you approve the request there, saves the Token to a
 profile in your user config directory (`packagemaze/credentials.json`, mode
 0600) and verifies it. It prints the Organization and profile, never the Token.
-`maze auth exchange-oidc` exchanges a CI OIDC identity token for a short-lived
-PackageMaze Token. `maze auth show-identity` prints the claims in the job's
-identity token without signing in. `maze publish` sends local artifact facts
+`maze auth exchange-oidc` exchanges a job's workload identity token for a
+short-lived PackageMaze Token. `maze auth exec` does the same exchange and
+runs a command with its package clients signed in to the Feeds.
+`maze auth show-identity` prints the claims in the job's identity token
+without signing in. `maze publish` sends local artifact facts
 to PackageMaze, executes the returned backend plan, uploads bytes, and waits for Publish
 Finalization by default. Local and staging development use the normal endpoint
 overrides.
@@ -62,7 +66,8 @@ Useful development commands:
 ```sh
 go run ./cmd/maze --help
 go run ./cmd/maze version
-MAZE_OIDC_TOKEN="$OIDC_TOKEN" go run ./cmd/maze auth exchange-oidc --provider manual --feed <organization>/<feed> --purpose install
+# --provider manual is for local development against a local API only.
+MAZE_OIDC_TOKEN="$OIDC_TOKEN" go run ./cmd/maze auth exchange-oidc --base-url http://127.0.0.1:8787 --allow-insecure-localhost --provider manual --feed <organization>/<feed> --purpose install
 MAZE_TOKEN="$PACKAGE_MAZE_TOKEN" go run ./cmd/maze publish dist/* --feed <organization>/<feed>
 ```
 
@@ -101,8 +106,9 @@ PackageMaze uses the opaque id only for correlation; neither the CLI nor the
 service infers human intent from it. Legacy `--client-context-json` remains
 accepted for explicit rolling compatibility, but its contents are
 caller-supplied and unverified; it is not the Build evidence or correlation
-contract. As of v0.0.4 the CLI no longer collects or sends CI environment
-metadata automatically.
+contract. The CLI collects no CI environment metadata automatically, with one
+exception: on CircleCI it sends the fixed allowlist described under
+[CircleCI](#circleci).
 
 PackageMaze returns the server-derived human-facing Build reference separately.
 JSON, `github-output`, and shell output emit `build_number` and canonical
@@ -128,22 +134,60 @@ maze auth exchange-oidc \
   --purpose install
 ```
 
-On GitHub Actions and CircleCI, `maze` requests the job's identity token
-itself. On any other platform PackageMaze has an OIDC access rule for, request
-the platform's identity token for the audience `https://api.packagemaze.com`
-and pass it in with `--provider oidc`:
+Where the identity token comes from decides what the request names:
 
-```sh
-<your platform's token command> | maze auth exchange-oidc \
-  --provider oidc --oidc-token-stdin \
-  --feed <organization>/<feed> \
-  --purpose install
-```
+- **Built-in platforms.** On GitHub Actions and CircleCI, `maze` requests the
+  job's identity token itself (the Actions token request URL, or
+  `circleci run oidc get`) and names that platform as the request's
+  `provider`.
+- **Any other platform** PackageMaze has an access rule for, such as GitLab
+  CI/CD or a sandbox, is a custom platform. Request the platform's identity
+  token for the audience `https://api.packagemaze.com` and pass it in:
 
-`--oidc-token-file` and `MAZE_OIDC_TOKEN` work the same way. The token never
-appears in arguments or output. PackageMaze accepts an identity token once, so
-request a fresh one for each exchange. Publishing through `--provider oidc` is
-not supported yet.
+  ```sh
+  <your platform's token command> | maze auth exchange-oidc \
+    --identity-token-stdin \
+    --feed <organization>/<feed> \
+    --purpose install
+  ```
+
+  A supplied token names no `provider`: PackageMaze selects the verifier from
+  the token's issuer. On GitLab CI/CD, for example, request the token with
+  `id_tokens` into `MAZE_OIDC_TOKEN`:
+
+  ```yaml
+  id_tokens:
+    MAZE_OIDC_TOKEN:
+      aud: https://api.packagemaze.com
+  script:
+    - maze auth exchange-oidc --feed <organization>/<feed> --purpose install
+  ```
+
+- **Injected identity.** When the platform's egress proxy adds the identity
+  token to the request itself, pass `--identity-token-injected`; see
+  [Injected Identity](#injected-identity).
+
+A supplied token is read from, in order: `--identity-token-file <path>`,
+`--identity-token-stdin`, then the environment variable `--identity-token-env`
+names (default `MAZE_OIDC_TOKEN`), then `MAZE_IDENTITY_TOKEN`. On GitHub
+Actions a file or stdin token replaces the job's own; an environment token
+does not. On CircleCI an environment token replaces `circleci run oidc get`.
+The token never appears in arguments or output. PackageMaze accepts an
+identity token once, so request a fresh one for each exchange.
+
+`--oidc-token-file`, `--oidc-token-stdin`, and `--oidc-token-env` are the
+earlier names of these flags. They keep working, and giving both names of one
+flag is an error.
+
+`--provider` names a provider explicitly, and an explicit name is always sent:
+`github` or `circleci` for a built-in platform, `oidc` for PackageMaze's
+generic verifier, or `manual` for local development against a local API
+(never chosen automatically). `--provider auto`, the default, names one only
+when `maze` requested the token from a built-in platform itself. `--verbose`
+prints which provider was named, or that none was.
+
+PackageMaze decides what the identity may do: a publish Token needs a publish
+access rule on the Feed.
 
 Some platforms do not sign the job's git ref or commit. When the platform's
 setup in PackageMaze asks for them, pass the job's own values with
@@ -165,9 +209,13 @@ maze auth exchange-oidc \
 
 One Token covers all of them. `--format json` carries PackageMaze's `feeds`
 list (`feed`, `feed_base_url`, and `artifact_protocol` for each Feed) in place
-of the single-Feed fields. `--format shell`, `--format github-output`, and
-`--purpose publish` take one Feed. Several Feeds need a PackageMaze server that
-accepts them.
+of the single-Feed fields. `--format shell` exports `MAZE_FEEDS` (the Feed
+references, space-separated) in place of `MAZE_FEED`, `MAZE_FEED_BASE_URL`,
+and `MAZE_ARTIFACT_PROTOCOL`. `--format github-output` adds the output
+`<output-name>-feeds` (for example `token-feeds`) holding the Feed references
+as a JSON array, in place of `artifact_protocol` and `feed_base_url`.
+`--purpose publish` takes one Feed. Several Feeds need a PackageMaze server
+that accepts them.
 
 Required flags:
 
@@ -184,19 +232,101 @@ Output formats:
 - `--format shell`
 - `--format github-output`
 
-For local API development, point the same command at the local API root and
-provide an OIDC token through stdin, a file, or an environment variable:
+For local API development only, point the same command at the local API root
+and provide a token through stdin, a file, or an environment variable with
+`--provider manual`:
 
 ```sh
 printf '%s' "$OIDC_TOKEN" | maze auth exchange-oidc \
   --base-url http://127.0.0.1:8787 \
   --allow-insecure-localhost \
   --provider manual \
-  --oidc-token-stdin \
+  --identity-token-stdin \
   --feed <organization>/<feed> \
   --purpose install \
   --format json
 ```
+
+## Run A Command With Feed Access
+
+`maze auth exec` takes every `maze auth exchange-oidc` flag, including
+repeated `--feed`, then runs the command after `--` with temporary
+package-client configuration for each Feed the Token covers:
+
+```sh
+maze auth exec --feed <organization>/<feed> --purpose install -- npm ci
+maze auth exec \
+  --feed <organization>/<npm-feed> --feed <organization>/<pypi-feed> \
+  --purpose install -- make install
+```
+
+For npm Feeds it writes a private npm user config, in a new directory only
+you can open (mode `0700`, file `0600`), and points `NPM_CONFIG_USERCONFIG`
+at it, which npm and pnpm read:
+
+```ini
+registry=https://pkg.packagemaze.com/<organization>/<npm-feed>/
+replace-registry-host=npmjs
+//pkg.packagemaze.com/<organization>/<npm-feed>/:_authToken=${MAZE_TOKEN}
+```
+
+The first npm Feed is the default registry; every npm Feed gets its own
+Feed-URL-scoped credential line. It also sets `COREPACK_NPM_REGISTRY` and
+`COREPACK_NPM_TOKEN` for Corepack, for the first npm Feed only, because
+Corepack reads one registry. It sets nothing for Yarn Berry, whose only
+environment token is not scoped to a URL: name the Feed under `npmRegistries`
+in the project's `.yarnrc.yml` with `npmAuthToken: "${MAZE_TOKEN}"`, which
+`maze auth exec` exports. The command does not read your own npm user config,
+and an inherited `NPM_CONFIG_REGISTRY` is removed because it would outrank
+every npmrc file.
+
+For PyPI Feeds it sets `PIP_INDEX_URL` and `UV_DEFAULT_INDEX` to the first
+Feed's Simple URL, `https://__token__:<Token>@pkg.packagemaze.com/<organization>/<feed>/simple/`,
+and, for more PyPI Feeds, `PIP_EXTRA_INDEX_URL` and `UV_INDEX` to the others.
+pip merges every index; uv searches the extra ones, in `--feed` order, before
+the default one. Inherited `PIP_EXTRA_INDEX_URL` and `UV_INDEX` are removed
+when there is one PyPI Feed, and uv's deprecated `UV_INDEX_URL` and
+`UV_EXTRA_INDEX_URL` always are, so the named Feeds are the only indexes.
+
+The command sees the Token as `MAZE_TOKEN` too. The Token is never printed,
+never put in an argument, and never written to a file: the npm user config
+references `${MAZE_TOKEN}`. `maze auth exec` never sets `cafile` or `cert` and
+never changes your own configuration files. `--verbose` names the Feeds and
+the variables set or removed, never a value.
+
+`maze` exits with the command's exit status. It removes the directory when the
+command ends, fails, or stops on a signal: `SIGINT`, `SIGTERM`, and `SIGHUP`
+are passed to the command, and a command a signal stopped exits with 128 plus
+the signal number. A `SIGKILL` leaves the directory behind, without a Token in
+it. A Feed of any other Artifact Protocol, a `--format`, or a missing command
+fails before anything runs. Bun, Poetry, PDM, and PyPI publishing tools are
+not configured.
+
+## Injected Identity
+
+Some sandbox platforms keep the identity token outside the workload: their
+egress proxy adds it to outbound requests for hosts you choose, as
+`Authorization: Bearer <token>`. PackageMaze reads the identity token from
+that header when the request body carries none. Pass
+`--identity-token-injected` and `maze` sends no `oidc_token`, no
+`Authorization` header of its own, and no `provider`, so the token's issuer
+selects the verifier:
+
+```sh
+# Inside a sandbox whose platform injects its identity token into requests
+# for api.packagemaze.com (E2B works this way).
+maze auth exchange-oidc \
+  --identity-token-injected \
+  --feed <organization>/<feed> \
+  --purpose install
+```
+
+The request still carries `audience` (default `https://api.packagemaze.com`,
+or `--audience`); it must match the audience the platform requested the
+token for. `--identity-token-injected` fails when combined with
+`--identity-token-file`, `--identity-token-stdin`, an identity token in the
+environment, or `--provider`. `maze auth show-identity` cannot read an
+injected token.
 
 ## Show Identity
 
@@ -206,12 +336,13 @@ carries, before any sign-in fails:
 
 ```sh
 <your platform's token command> | maze auth show-identity \
-  --provider oidc --oidc-token-stdin
+  --identity-token-stdin
 ```
 
 The command obtains the token exactly as `maze auth exchange-oidc` does (same
-`--provider`, `--oidc-token-stdin`, `--oidc-token-file`, `--oidc-token-env`,
-`--audience`, and `--base-url`), decodes it locally, and prints the issuer,
+`--provider`, `--identity-token-stdin`, `--identity-token-file`,
+`--identity-token-env`, `--audience`, and `--base-url`), decodes it locally,
+and prints the issuer,
 audience, expiry, signing algorithm and key id, then every other claim sorted
 by name. `--format json` prints `{"verified": false, "header": {...},
 "claims": {...}}`. The token is not verified and nothing is sent to
@@ -337,7 +468,7 @@ permissions:
 steps:
   - uses: actions/checkout@v4
   - id: packagemaze
-    uses: packagemaze/setup-maze@v0.0.5
+    uses: packagemaze/setup-maze@v0.0.7
     with:
       feed: <organization>/<feed>
       purpose: install
@@ -361,30 +492,16 @@ The `github-output` format writes the requested Token output plus
 `artifact_protocol`, `feed_base_url`, `build_number`, and `build_url` so wrapper
 actions can choose protocol-specific setup, use
 canonical registry URLs, and link users or Agents to the exact Build without
-asking workflows to duplicate Feed metadata.
+asking workflows to duplicate Feed metadata. For several Feeds it writes
+`<output-name>-feeds` in place of `artifact_protocol` and `feed_base_url`.
 
 The `shell` format writes `MAZE_TOKEN`, `MAZE_TOKEN_EXPIRES_AT`, `MAZE_FEED`,
 `MAZE_FEED_BASE_URL`, `MAZE_PURPOSE`, `MAZE_ARTIFACT_PROTOCOL`,
 `MAZE_BUILD_NUMBER`, and `MAZE_BUILD_URL` exports for wrapper
 actions that need to consume exchange metadata without using GitHub step
-outputs. Build exports are omitted when an older PackageMaze deployment does
+outputs; for several Feeds, `MAZE_FEEDS` replaces the three single-Feed
+exports. Build exports are omitted when an older PackageMaze deployment does
 not return a Build reference during a rolling upgrade.
-
-## GitLab CI/CD
-
-The CLI can acquire an explicitly configured GitLab OIDC token, but PackageMaze
-does not yet accept GitLab CI/CD identities in production. The command will
-surface the Worker's structured `unsupported_provider` diagnostic until a
-first-class GitLab integration ships.
-
-```yaml
-id_tokens:
-  MAZE_OIDC_TOKEN:
-    aud: https://api.packagemaze.com
-
-script:
-  - maze auth exchange-oidc --feed <organization>/<feed> --purpose install
-```
 
 ## CircleCI
 
@@ -401,6 +518,10 @@ Then run:
 maze auth exchange-oidc --feed <organization>/<feed> --purpose install
 ```
 
+When `maze` runs `circleci run oidc get` itself, the request names the
+`circleci` provider; a token supplied through `MAZE_OIDC_TOKEN` names none and
+its issuer selects the verifier.
+
 The command also sends a fixed, non-secret allowlist of CircleCI's built-in job
 environment for Build reporting: job number and URL, job name, parallel node
 position, pull request and repository URLs, and commit SHA. PackageMaze validates
@@ -409,20 +530,24 @@ as client reported; it never affects CI access rules or Token scopes.
 
 ## Manual Token Input
 
-Manual mode avoids a plain `--oidc-token` flag so token values do not leak into
-shell history or process listings.
+`--provider manual` is for local development against a local PackageMaze API
+only; `maze` never chooses it. Like every token input, it avoids a plain
+`--identity-token` flag so token values do not leak into shell history or
+process listings.
 
 ```sh
 printf '%s' "$OIDC_TOKEN" | maze auth exchange-oidc \
+  --base-url http://127.0.0.1:8787 \
+  --allow-insecure-localhost \
   --provider manual \
-  --oidc-token-stdin \
+  --identity-token-stdin \
   --feed <organization>/<feed> \
   --purpose install
 ```
 
 ## Security Notes
 
-- The raw OIDC token is never printed.
+- The raw identity token is never printed.
 - The PackageMaze Token is printed only through the requested output format.
 - `--verbose` writes non-secret diagnostics to stderr.
 - `github-output` writes to `$GITHUB_OUTPUT` and emits an `add-mask` workflow
