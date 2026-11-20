@@ -60,6 +60,7 @@ func newAuthCommand(deps auth.Dependencies) *cobra.Command {
 	}
 	authCommand.AddCommand(newExchangeOIDCCommand(deps))
 	authCommand.AddCommand(newShowIdentityCommand(deps))
+	authCommand.AddCommand(newAuthExecCommand(deps, defaultExecDependencies()))
 	return authCommand
 }
 
@@ -107,6 +108,13 @@ func newExchangeOIDCCommand(deps auth.Dependencies) *cobra.Command {
 			})
 		},
 	}
+	bindExchangeFlags(command, &config, &reportedRef, &reportedCommit)
+	return command
+}
+
+// bindExchangeFlags registers the flags every command that exchanges an
+// identity token for a PackageMaze Token shares.
+func bindExchangeFlags(command *cobra.Command, config *auth.Config, reportedRef *string, reportedCommit *string) {
 	flags := command.Flags()
 	flags.StringVar(&config.BaseURL, "base-url", "", "PackageMaze API Domain base URL (default: MAZE_BASE_URL, else https://api.packagemaze.com)")
 	flags.StringVar(&config.APIURL, "api-url", "", "Full PackageMaze API root URL override (default: {base-url}/v1)")
@@ -119,8 +127,8 @@ func newExchangeOIDCCommand(deps auth.Dependencies) *cobra.Command {
 	flags.StringVar(&config.OIDCTokenFile, "oidc-token-file", "", "File containing an OIDC token")
 	flags.BoolVar(&config.OIDCTokenStdin, "oidc-token-stdin", false, "Read the OIDC token from stdin")
 	flags.StringVar(&config.SetupInvocationID, "setup-invocation-id", "", "Unverified non-secret wrapper invocation id (default: MAZE_SETUP_INVOCATION_ID)")
-	flags.StringVar(&reportedRef, "ref", "", reportedFlagHelp("git ref"))
-	flags.StringVar(&reportedCommit, "commit", "", reportedFlagHelp("git commit"))
+	flags.StringVar(reportedRef, "ref", "", reportedFlagHelp("git ref"))
+	flags.StringVar(reportedCommit, "commit", "", reportedFlagHelp("git commit"))
 	flags.StringVar(&config.ClientContextJSON, "client-context-json", "", "Legacy caller-supplied, unverified client metadata JSON accepted for compatibility")
 	flags.StringVar(&config.Format, "format", string(output.FormatToken), "Output format: token, json, shell, or github-output")
 	flags.StringVar(&config.OutputName, "output-name", auth.DefaultOutputName, "Output name when --format github-output")
@@ -133,7 +141,6 @@ func newExchangeOIDCCommand(deps auth.Dependencies) *cobra.Command {
 	_ = flags.MarkHidden("allow-github-output-outside-actions")
 	_ = command.MarkFlagRequired("feed")
 	_ = command.MarkFlagRequired("purpose")
-	return command
 }
 
 func reportedFlagHelp(value string) string {
