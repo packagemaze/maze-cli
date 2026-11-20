@@ -243,8 +243,8 @@ func TestClientExchangeCIStatusErrors(t *testing.T) {
 		want   string
 	}{
 		{status: http.StatusBadRequest, want: "HTTP 400"},
-		{status: http.StatusUnauthorized, want: "rejected this CI identity"},
-		{status: http.StatusForbidden, want: "rejected this CI identity"},
+		{status: http.StatusUnauthorized, want: "rejected this workload identity"},
+		{status: http.StatusForbidden, want: "rejected this workload identity"},
 		{status: http.StatusNotFound, want: "HTTP 404"},
 		{status: http.StatusNotImplemented, want: "server returned HTTP 501"},
 		{status: http.StatusInternalServerError, want: "server returned HTTP 500"},
@@ -282,7 +282,7 @@ func TestClientExchangeCIStructuredWorkerError(t *testing.T) {
 	defer server.Close()
 
 	_, err := NewClient(server.URL, server.Client()).ExchangeCI(context.Background(), CITokenRequest{
-		Provider: "gitlab", Feed: "your-org/npm", Purpose: "install", Audience: "https://api.packagemaze.com", OIDCToken: "oidc-secret",
+		Provider: "oidc", Feed: "your-org/npm", Purpose: "install", Audience: "https://api.packagemaze.com", OIDCToken: "oidc-secret",
 	})
 	if err == nil {
 		t.Fatal("expected status error")
@@ -442,7 +442,7 @@ func TestClientExchangeCIReportedBody(t *testing.T) {
 
 const todaysRejectedIdentityDetail = `"category":"workload_identity_rejected","code":"workload_identity_rejected","message":"PackageMaze rejected this CI identity.","recovery":"Check the PackageMaze CI access rule and retry the CI job."`
 
-const todaysRejectedIdentityRefusalHead = `PackageMaze rejected this CI identity.
+const todaysRejectedIdentityRefusalHead = `PackageMaze rejected this workload identity.
 Feed:
   your-org/npm
 Provider:
@@ -458,9 +458,65 @@ PackageMaze suggests:
 
 const todaysRejectedIdentityChecks = `
 Check:
-  - the CI trust rule configured for this Feed
-  - the workflow, branch, or tag rule
+  - the access rule on this Feed and what it requires of the identity
+  - the platform that issued the identity token, and its audience
   - the PackageMaze Feed name`
+
+func TestClientExchangeCIRefusalWithoutAProviderSaysTheIssuerSelects(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusUnauthorized)
+		_, _ = writer.Write([]byte(`{"detail":{` + todaysRejectedIdentityDetail + `}}`))
+	}))
+	defer server.Close()
+	_, err := NewClient(server.URL+"/v1", server.Client()).ExchangeCI(context.Background(), CITokenRequest{
+		Feed: "your-org/npm", Purpose: "install", Audience: "https://api.packagemaze.com", OIDCToken: "oidc-secret",
+	})
+	want := "Provider:\n  none named; the identity token's issuer selects it\nPurpose:"
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("err = %v, want it to contain %q", err, want)
+	}
+}
+
+func TestClientExchangeCIOmitsAnEmptyProviderAndIdentityToken(t *testing.T) {
+	var body []byte
+	var authorization string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		body, _ = io.ReadAll(request.Body)
+		authorization = request.Header.Get("Authorization")
+		_, _ = writer.Write([]byte(`{"token":"maze_ci_fixture","expires_at":"2026-06-08T13:30:00Z"}`))
+	}))
+	defer server.Close()
+	client := NewClient(server.URL+"/v1", server.Client())
+	tests := []struct {
+		name    string
+		request CITokenRequest
+		want    string
+	}{
+		{
+			name:    "supplied token, issuer selects",
+			request: CITokenRequest{Feed: "your-org/npm", Purpose: "install", Audience: "https://api.packagemaze.com", OIDCToken: "oidc-fixture"},
+			want:    `{"feed":"your-org/npm","purpose":"install","package":null,"audience":"https://api.packagemaze.com","oidc_token":"oidc-fixture"}`,
+		},
+		{
+			name:    "identity token injected by the platform",
+			request: CITokenRequest{Feed: "your-org/npm", Purpose: "install", Audience: "https://api.packagemaze.com"},
+			want:    `{"feed":"your-org/npm","purpose":"install","package":null,"audience":"https://api.packagemaze.com"}`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := client.ExchangeCI(context.Background(), test.request); err != nil {
+				t.Fatalf("ExchangeCI: %v", err)
+			}
+			if string(body) != test.want {
+				t.Fatalf("body =\n%s\nwant\n%s", body, test.want)
+			}
+			if authorization != "" {
+				t.Fatalf("Authorization = %q, want none", authorization)
+			}
+		})
+	}
+}
 
 func TestClientExchangeCIRefusalDetails(t *testing.T) {
 	tests := []struct {

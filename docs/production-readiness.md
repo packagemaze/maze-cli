@@ -53,14 +53,16 @@ items below are deliberately addressed.
 - [x] API contract tests cover request/response schemas and redaction.
 - [x] Wrapper setup correlation uses the typed, optional
   `setup_invocation_id` request field with tested flag-over-environment
-  precedence; the CLI does not collect CI environment metadata automatically,
-  and explicit legacy client metadata is not treated as Build evidence.
+  precedence; the CLI collects no CI environment metadata automatically
+  except CircleCI's fixed job-environment allowlist, and explicit legacy
+  client metadata is not treated as Build evidence.
 - [x] Exchange responses expose the server-derived `build_number` and canonical
   `build_url` in machine output without changing token-only stdout.
 - [x] The API Domain exposes `POST /v1/auth/workload-token` with the same names used
   by CLI and future MCP capabilities.
-- [ ] CI provider trust rules are testable with GitHub Actions, GitLab CI/CD,
-  CircleCI, and manual token input.
+- [ ] Access rules are testable with GitHub Actions, CircleCI, custom
+  platforms (supplied and injected identity tokens), and local manual token
+  input.
 - [ ] Multiple PackageMaze environments can be selected without confusing API
   Domain, Web Domain, and Package Client Domain behavior.
 
@@ -82,8 +84,8 @@ items below are deliberately addressed.
   shell runners.
 - [x] End-to-end tests exercise the real command entrypoint against a local
   PackageMaze-compatible API.
-- [ ] CI-provider template tests verify GitHub Actions, GitLab, and CircleCI
-  snippets.
+- [ ] Platform template tests verify GitHub Actions, CircleCI, and custom
+  platform snippets.
 - [ ] Race tests and fuzz tests cover parsers, URL validation, output escaping,
   and response decoding.
 - [ ] Golden tests lock help text, docs, completions, and JSON fields.

@@ -34,6 +34,9 @@ type Result struct {
 	// Feeds is PackageMaze's answer for several Feeds, in place of Feed,
 	// FeedBaseURL, and ArtifactProtocol.
 	Feeds json.RawMessage
+	// FeedReferences names the Feeds of a several-Feed Token, in request
+	// order; it is empty for one Feed.
+	FeedReferences []string
 }
 
 type WriteConfig struct {
@@ -93,7 +96,7 @@ func writeJSON(writer io.Writer, result Result) error {
 		BuildURL         string          `json:"build_url,omitempty"`
 		Package          string          `json:"package,omitempty"`
 		Scopes           []string        `json:"scopes"`
-		Provider         string          `json:"provider"`
+		Provider         string          `json:"provider,omitempty"`
 		ArtifactProtocol string          `json:"artifact_protocol,omitempty"`
 		Feeds            json.RawMessage `json:"feeds,omitempty"`
 	}{
@@ -117,34 +120,30 @@ func writeJSON(writer io.Writer, result Result) error {
 }
 
 func writeShell(writer io.Writer, result Result) error {
-	if _, err := fmt.Fprintf(
-		writer,
-		"export MAZE_TOKEN=%s\nexport MAZE_TOKEN_EXPIRES_AT=%s\nexport MAZE_FEED=%s\nexport MAZE_FEED_BASE_URL=%s\nexport MAZE_PURPOSE=%s\nexport MAZE_ARTIFACT_PROTOCOL=%s\n",
-		shellQuote(result.Token),
-		shellQuote(result.ExpiresAt.UTC().Format(time.RFC3339)),
-		shellQuote(result.Feed),
-		shellQuote(result.FeedBaseURL),
-		shellQuote(result.Purpose),
-		shellQuote(result.ArtifactProtocol),
-	); err != nil {
-		return err
+	several := len(result.FeedReferences) > 1
+	exports := []namedValue{
+		{name: "MAZE_TOKEN", value: result.Token},
+		{name: "MAZE_TOKEN_EXPIRES_AT", value: result.ExpiresAt.UTC().Format(time.RFC3339)},
+	}
+	if several {
+		exports = append(exports, namedValue{name: "MAZE_FEEDS", value: strings.Join(result.FeedReferences, " ")})
+	} else {
+		exports = append(exports, namedValue{name: "MAZE_FEED", value: result.Feed}, namedValue{name: "MAZE_FEED_BASE_URL", value: result.FeedBaseURL})
+	}
+	exports = append(exports, namedValue{name: "MAZE_PURPOSE", value: result.Purpose})
+	if !several {
+		exports = append(exports, namedValue{name: "MAZE_ARTIFACT_PROTOCOL", value: result.ArtifactProtocol})
 	}
 	if result.BuildNumber != 0 {
-		if _, err := fmt.Fprintf(
-			writer,
-			"export MAZE_BUILD_NUMBER=%s\n",
-			shellQuote(fmt.Sprintf("%d", result.BuildNumber)),
-		); err != nil {
-			return err
-		}
+		exports = append(exports, namedValue{name: "MAZE_BUILD_NUMBER", value: fmt.Sprintf("%d", result.BuildNumber)})
 	}
 	if result.BuildURL != "" {
-		_, err := fmt.Fprintf(
-			writer,
-			"export MAZE_BUILD_URL=%s\n",
-			shellQuote(result.BuildURL),
-		)
-		return err
+		exports = append(exports, namedValue{name: "MAZE_BUILD_URL", value: result.BuildURL})
+	}
+	for _, export := range exports {
+		if _, err := fmt.Fprintf(writer, "export %s=%s\n", export.name, shellQuote(export.value)); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -156,18 +155,27 @@ func writeGitHubOutput(writer io.Writer, result Result, outputName string, outpu
 	if strings.TrimSpace(outputName) == "" {
 		outputName = "token"
 	}
-	outputs := []gitHubOutputValue{{name: outputName, value: result.Token}}
+	outputs := []namedValue{{name: outputName, value: result.Token}}
+	if len(result.FeedReferences) > 1 {
+		// The hyphen keeps this name apart from every --output-name and every
+		// metadata output, which allow only letters, digits, and underscores.
+		feeds, err := json.Marshal(result.FeedReferences)
+		if err != nil {
+			return fmt.Errorf("encode Feed references: %w", err)
+		}
+		outputs = append(outputs, namedValue{name: outputName + "-feeds", value: string(feeds)})
+	}
 	if strings.TrimSpace(result.ArtifactProtocol) != "" {
-		outputs = append(outputs, gitHubOutputValue{name: "artifact_protocol", value: result.ArtifactProtocol})
+		outputs = append(outputs, namedValue{name: "artifact_protocol", value: result.ArtifactProtocol})
 	}
 	if strings.TrimSpace(result.FeedBaseURL) != "" {
-		outputs = append(outputs, gitHubOutputValue{name: "feed_base_url", value: result.FeedBaseURL})
+		outputs = append(outputs, namedValue{name: "feed_base_url", value: result.FeedBaseURL})
 	}
 	if result.BuildNumber != 0 {
-		outputs = append(outputs, gitHubOutputValue{name: "build_number", value: fmt.Sprintf("%d", result.BuildNumber)})
+		outputs = append(outputs, namedValue{name: "build_number", value: fmt.Sprintf("%d", result.BuildNumber)})
 	}
 	if result.BuildURL != "" {
-		outputs = append(outputs, gitHubOutputValue{name: "build_url", value: result.BuildURL})
+		outputs = append(outputs, namedValue{name: "build_url", value: result.BuildURL})
 	}
 	for _, output := range outputs {
 		if err := validateGitHubOutputValue(output.name, output.value); err != nil {
@@ -188,7 +196,7 @@ func writeGitHubOutput(writer io.Writer, result Result, outputName string, outpu
 	return err
 }
 
-type gitHubOutputValue struct {
+type namedValue struct {
 	name  string
 	value string
 }

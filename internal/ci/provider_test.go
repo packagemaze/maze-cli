@@ -23,10 +23,9 @@ func TestDetectProvider(t *testing.T) {
 			wantFound:    true,
 		},
 		{
-			name:         "gitlab",
-			env:          map[string]string{"GITLAB_CI": "true"},
-			wantProvider: ProviderGitLab,
-			wantFound:    true,
+			name:      "gitlab is an ordinary platform, not a built-in one",
+			env:       map[string]string{"GITLAB_CI": "true"},
+			wantFound: false,
 		},
 		{
 			name:         "circleci",
@@ -41,8 +40,8 @@ func TestDetectProvider(t *testing.T) {
 		},
 		{
 			name:    "ambiguous",
-			env:     map[string]string{"GITHUB_ACTIONS": "true", "GITLAB_CI": "true"},
-			wantErr: "multiple CI providers",
+			env:     map[string]string{"GITHUB_ACTIONS": "true", "CIRCLECI": "true"},
+			wantErr: "multiple built-in platforms were detected (github, circleci)",
 		},
 	}
 
@@ -65,6 +64,18 @@ func TestDetectProvider(t *testing.T) {
 				t.Fatalf("provider = %q, want %q", provider, test.wantProvider)
 			}
 		})
+	}
+}
+
+func TestParseProviderNoLongerKnowsGitLab(t *testing.T) {
+	_, err := ParseProvider("gitlab")
+	if err == nil || err.Error() != "provider must be auto, github, circleci, oidc, or manual" {
+		t.Fatalf("err = %v", err)
+	}
+	for _, value := range []string{"", "auto", "github", "circleci", "oidc", "manual"} {
+		if _, err := ParseProvider(value); err != nil {
+			t.Fatalf("ParseProvider(%q): %v", value, err)
+		}
 	}
 }
 
