@@ -18,8 +18,10 @@ import (
 )
 
 const (
-	defaultInterval = 2 * time.Second
-	maxTokenName    = 80
+	// About thirty seconds of failed polls in a row, well inside a request's ten minutes.
+	maxTransientCollectFailures = 15
+	defaultInterval             = 2 * time.Second
+	maxTokenName                = 80
 )
 
 type Config struct {
@@ -178,14 +180,39 @@ func waitForApproval(ctx context.Context, client Client, started Started, deps D
 	if interval <= 0 {
 		interval = defaultInterval
 	}
+	failures := 0
 	for {
 		collected, err := client.Collect(ctx, started)
-		if err != nil || collected != nil {
-			return collected, err
+		if collected != nil {
+			return collected, nil
+		}
+		if err != nil {
+			failures++
+			if !transient(err) || failures > maxTransientCollectFailures {
+				return nil, err
+			}
+		} else {
+			failures = 0
 		}
 		if err := deps.Sleep(ctx, interval); err != nil {
 			return nil, err
 		}
+	}
+}
+
+// transient is a collect failure worth polling through: PackageMaze asked for a
+// retry (503 token_flow_retry, with the request still approved), throttled, or
+// the request never got an answer. A denial or an expiry is final.
+func transient(err error) bool {
+	var refused *RefusedError
+	if !errors.As(err, &refused) {
+		return errors.Is(err, errRequestFailed)
+	}
+	switch refused.StatusCode {
+	case http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	default:
+		return false
 	}
 }
 

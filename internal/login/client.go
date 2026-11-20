@@ -15,6 +15,9 @@ import (
 
 const maxResponseBytes = 1024 * 1024
 
+// errRequestFailed marks a request that got no answer from PackageMaze.
+var errRequestFailed = errors.New("PackageMaze request failed")
+
 // StartRequest is what maze asks PackageMaze for; a person narrows it in the browser.
 type StartRequest struct {
 	Organization string `json:"organization"`
@@ -140,7 +143,7 @@ func (c Client) post(ctx context.Context, child string, body any, out any) (int,
 	}
 	response, err := httpClient.Do(request)
 	if err != nil {
-		return 0, fmt.Errorf("PackageMaze request failed: %w", err)
+		return 0, fmt.Errorf("%w: %w", errRequestFailed, err)
 	}
 	defer response.Body.Close()
 	content, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes))

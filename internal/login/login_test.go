@@ -185,3 +185,26 @@ func TestLoginRefusesBadInputBeforeAnyRequest(t *testing.T) {
 		}
 	}
 }
+
+func TestLoginPollsThroughARetryableCollect(t *testing.T) {
+	fake := &fakeServer{collectAnswers: []func(http.ResponseWriter){pending, refusal(http.StatusServiceUnavailable, "token_flow_retry"), refusal(http.StatusTooManyRequests, "rate_limited"), collected}}
+	result, _, _, err := run(t, fake, Config{Organization: "acme"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fake.collects.Load() != 4 || result.Profile != "acme" {
+		t.Fatalf("collects=%d result=%+v", fake.collects.Load(), result)
+	}
+}
+
+func TestLoginGivesUpAfterARunOfRetryableFailures(t *testing.T) {
+	fake := &fakeServer{collectAnswers: []func(http.ResponseWriter){refusal(http.StatusServiceUnavailable, "token_flow_retry")}}
+	_, _, _, err := run(t, fake, Config{Organization: "acme"})
+	var refused *RefusedError
+	if !errors.As(err, &refused) || refused.Code != "token_flow_retry" {
+		t.Fatalf("err = %v", err)
+	}
+	if got := fake.collects.Load(); got != maxTransientCollectFailures+1 {
+		t.Fatalf("collects = %d", got)
+	}
+}
