@@ -5,7 +5,7 @@ import "fmt"
 const PackageMazeClientVersionHeader = "X-PackageMaze-Client-Version"
 
 var (
-	Version = "0.0.13"
+	Version = "0.0.14"
 	Commit  = "unknown"
 	Date    = "unknown"
 )
