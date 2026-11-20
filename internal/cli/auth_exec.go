@@ -66,9 +66,12 @@ func newAuthExecCommand(deps auth.Dependencies, execDeps execDependencies) *cobr
 			"The Token is never printed, passed as an argument, or written to a file. maze exits with the command's exit status.",
 		Example: "  maze auth exec --feed your-org/npm --purpose install -- npm ci\n" +
 			"  maze auth exec --feed your-org/npm --feed your-org/pypi --purpose install -- make install\n" +
-			"  your-platform-token-command | maze auth exec --provider oidc --oidc-token-stdin --feed your-org/pypi --purpose install -- uv sync",
+			"  your-platform-token-command | maze auth exec --identity-token-stdin --feed your-org/pypi --purpose install -- uv sync",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := refuseOutputFlags(cmd); err != nil {
+				return err
+			}
+			if err := checkIdentityTokenAliases(cmd); err != nil {
 				return err
 			}
 			if len(args) == 0 {
@@ -126,7 +129,7 @@ func runAuthExec(cmd *cobra.Command, config auth.Config, deps auth.Dependencies,
 		return err
 	}
 	if resolved.Verbose {
-		describeExec(cmd.ErrOrStderr(), result.Provider, feeds, contribution)
+		describeExec(cmd.ErrOrStderr(), providerDiagnostic(resolved, result.Provider), feeds, contribution)
 	}
 	code, err := execDeps.Run(subprocess.Spec{
 		Path:   argv[0],
@@ -178,11 +181,8 @@ func grantedFeeds(result output.Result) ([]clientconfig.Feed, error) {
 }
 
 // describeExec names what was configured, never a value.
-func describeExec(stderr io.Writer, provider string, feeds []clientconfig.Feed, contribution clientconfig.Contribution) {
-	if provider == "" {
-		provider = "none named"
-	}
-	_, _ = fmt.Fprintf(stderr, "PackageMaze OIDC exchange provider: %s\n", provider)
+func describeExec(stderr io.Writer, providerLine string, feeds []clientconfig.Feed, contribution clientconfig.Contribution) {
+	_, _ = fmt.Fprint(stderr, providerLine)
 	for _, feed := range feeds {
 		_, _ = fmt.Fprintf(stderr, "maze auth exec: %s Feed %s at %s\n", feed.ArtifactProtocol, feed.Reference, feed.BaseURL)
 	}

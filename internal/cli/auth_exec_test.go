@@ -118,7 +118,7 @@ func (h *execHarness) execute(args ...string) (string, string, error) {
 	var stdout, stderr bytes.Buffer
 	root.SetOut(&stdout)
 	root.SetErr(&stderr)
-	root.SetArgs(append([]string{"auth", "exec", "--provider", "oidc", "--api-url", server.URL, "--allow-insecure-localhost"}, args...))
+	root.SetArgs(append([]string{"auth", "exec", "--api-url", server.URL, "--allow-insecure-localhost"}, args...))
 	err := root.Execute()
 	return stdout.String(), stderr.String(), err
 }
@@ -186,7 +186,7 @@ func TestAuthExecSeveralFeedsConfiguresEachArtifactProtocol(t *testing.T) {
 	if err != nil {
 		t.Fatalf("command returned error: %v", err)
 	}
-	if !strings.Contains(h.exchange, `"feeds":["acme/npm","acme/pypi"]`) {
+	if !strings.Contains(h.exchange, `"feeds":["acme/npm","acme/pypi"]`) || strings.Contains(h.exchange, `"provider"`) {
 		t.Fatalf("exchange = %s", h.exchange)
 	}
 	index := "https://__token__:" + execToken + "@pkg.packagemaze.com/acme/pypi/simple/"
@@ -200,6 +200,7 @@ func TestAuthExecSeveralFeedsConfiguresEachArtifactProtocol(t *testing.T) {
 		t.Fatalf("npm was not configured")
 	}
 	for _, want := range []string{
+		"PackageMaze OIDC exchange provider: none named; the supplied identity token's issuer selects it\n",
 		"maze auth exec: npm Feed acme/npm at https://pkg.packagemaze.com/acme/npm\n",
 		"maze auth exec: pypi Feed acme/pypi at https://pkg.packagemaze.com/acme/pypi\n",
 		"maze auth exec: set MAZE_TOKEN, NPM_CONFIG_USERCONFIG,",
@@ -255,6 +256,7 @@ func TestAuthExecRefusesOutputFlagsAndAMissingCommand(t *testing.T) {
 		{args: []string{"--format", "shell", "--", "npm", "ci"}, want: "--format does not apply to maze auth exec"},
 		{args: []string{"--json", "--", "npm", "ci"}, want: "--json does not apply to maze auth exec"},
 		{args: []string{"--"}, want: "maze auth exec needs a command to run after --"},
+		{args: []string{"--identity-token-stdin", "--oidc-token-stdin", "--", "npm", "ci"}, want: "--oidc-token-stdin is the earlier name of --identity-token-stdin; pass only one of them"},
 	} {
 		h := newExecHarness(t, execOneFeedResponse)
 		_, _, err := h.execute(append([]string{"--feed", "acme/npm", "--purpose", "install"}, test.args...)...)
