@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -21,6 +22,8 @@ import (
 const (
 	DefaultBaseURL              = "https://api.packagemaze.com"
 	DefaultOIDCTokenEnv         = "MAZE_OIDC_TOKEN"
+	IdentityTokenEnv            = "MAZE_IDENTITY_TOKEN"
+	legacyOIDCTokenEnv          = "PACKAGEMAZE_OIDC_TOKEN"
 	DefaultOutputName           = "token"
 	DefaultSetupInvocationIDEnv = "MAZE_SETUP_INVOCATION_ID"
 	maxReportedLength           = 256
@@ -43,6 +46,7 @@ type Config struct {
 	OIDCTokenEnv             string
 	OIDCTokenFile            string
 	OIDCTokenStdin           bool
+	IdentityInjected         bool // the platform adds the identity token to the request; maze sends none
 	SetupInvocationID        string
 	ReportedRef              *string
 	ReportedCommit           *string
@@ -72,7 +76,12 @@ type TokenExchanger interface {
 
 type ResolvedConfig struct {
 	Config
+	// ProviderValue is how maze obtains the identity token: a built-in
+	// platform (named or detected), oidc or manual (named), or auto when the
+	// caller supplies the token or the platform injects it.
 	ProviderValue ci.Provider
+	// ProviderNamed says the caller chose ProviderValue with --provider.
+	ProviderNamed bool
 	FormatValue   output.Format
 }
 
@@ -81,7 +90,7 @@ func Exchange(ctx context.Context, config Config, deps Dependencies) (output.Res
 	if err != nil {
 		return output.Result{}, ResolvedConfig{}, err
 	}
-	oidcToken, err := acquireOIDCToken(ctx, resolved, deps)
+	oidcToken, provider, err := acquireIdentityToken(ctx, resolved, deps)
 	if err != nil {
 		return output.Result{}, ResolvedConfig{}, err
 	}
@@ -107,7 +116,7 @@ func Exchange(ctx context.Context, config Config, deps Dependencies) (output.Res
 		exchanger = api.NewClient(resolved.APIURL, httpClient)
 	}
 	request := api.CITokenRequest{
-		Provider:          string(resolved.ProviderValue),
+		Provider:          provider,
 		Purpose:           resolved.Purpose,
 		Package:           requestPackage,
 		Audience:          resolved.Audience,
@@ -136,9 +145,10 @@ func Exchange(ctx context.Context, config Config, deps Dependencies) (output.Res
 		BuildURL:         response.BuildURL,
 		Package:          packageName,
 		Scopes:           response.Scopes,
-		Provider:         string(resolved.ProviderValue),
+		Provider:         provider,
 		ArtifactProtocol: response.ArtifactProtocol,
 		Feeds:            response.Feeds,
+		FeedReferences:   request.Feeds,
 	}, resolved, nil
 }
 
@@ -162,15 +172,11 @@ func Resolve(config Config, deps Dependencies) (ResolvedConfig, error) {
 	if err != nil {
 		return ResolvedConfig{}, err
 	}
-	providerValue, err := resolveProvider(config, env)
+	resolved, err := resolveIdentitySource(config, env)
 	if err != nil {
 		return ResolvedConfig{}, err
 	}
-	resolved := ResolvedConfig{
-		Config:        config,
-		ProviderValue: providerValue,
-		FormatValue:   formatValue,
-	}
+	resolved.FormatValue = formatValue
 	if err := validateResolved(resolved, env); err != nil {
 		return ResolvedConfig{}, err
 	}
@@ -204,7 +210,7 @@ func validateResolved(config ResolvedConfig, env ci.LookupEnv) error {
 	if err := validateReported("--commit", config.ReportedCommit); err != nil {
 		return err
 	}
-	if err := validateTokenInput(config); err != nil {
+	if err := validateTokenInput(config, env); err != nil {
 		return err
 	}
 	if config.FormatValue == output.FormatGitHubOutput {
@@ -248,9 +254,6 @@ func validateFeeds(config ResolvedConfig) error {
 	if config.Purpose == "publish" {
 		return fmt.Errorf("only one --feed is supported when --purpose publish")
 	}
-	if config.FormatValue == output.FormatShell || config.FormatValue == output.FormatGitHubOutput {
-		return fmt.Errorf("only one --feed is supported when --format %s; use --format token or json", config.FormatValue)
-	}
 	return nil
 }
 
@@ -280,15 +283,14 @@ func validateReported(flag string, value *string) error {
 func ResolveIdentitySource(config Config, deps Dependencies) (ResolvedConfig, error) {
 	env := lookupEnv(deps)
 	config = withIdentitySourceDefaults(config, env)
-	providerValue, err := resolveProvider(config, env)
+	resolved, err := resolveIdentitySource(config, env)
 	if err != nil {
 		return ResolvedConfig{}, err
 	}
-	resolved := ResolvedConfig{Config: config, ProviderValue: providerValue}
 	if err := validateEndpoints(resolved); err != nil {
 		return ResolvedConfig{}, err
 	}
-	if err := validateTokenInput(resolved); err != nil {
+	if err := validateTokenInput(resolved, env); err != nil {
 		return ResolvedConfig{}, err
 	}
 	return resolved, nil
@@ -297,7 +299,11 @@ func ResolveIdentitySource(config Config, deps Dependencies) (ResolvedConfig, er
 // AcquireIdentityToken obtains the job's identity token exactly as
 // exchange-oidc does. The value is a credential: callers must not print it.
 func AcquireIdentityToken(ctx context.Context, config ResolvedConfig, deps Dependencies) (string, error) {
-	return acquireOIDCToken(ctx, config, deps)
+	if config.IdentityInjected {
+		return "", errors.New("the platform adds this identity token to requests, so maze cannot read it")
+	}
+	token, _, err := acquireIdentityToken(ctx, config, deps)
+	return token, err
 }
 
 func withIdentitySourceDefaults(config Config, env ci.LookupEnv) Config {
@@ -346,9 +352,18 @@ func valueOrEmpty(value *string) string {
 	return *value
 }
 
-func validateTokenInput(config ResolvedConfig) error {
+func validateTokenInput(config ResolvedConfig, env ci.LookupEnv) error {
 	if config.OIDCTokenFile != "" && config.OIDCTokenStdin {
-		return fmt.Errorf("choose either --oidc-token-file or --oidc-token-stdin, not both")
+		return fmt.Errorf("choose either --identity-token-file or --identity-token-stdin, not both")
+	}
+	if !config.IdentityInjected {
+		return nil
+	}
+	if config.ProviderNamed {
+		return fmt.Errorf("--identity-token-injected cannot be combined with --provider %s: the identity token's issuer selects the provider", config.ProviderValue)
+	}
+	if source := suppliedTokenSource(config.Config, env); source != "" {
+		return fmt.Errorf("--identity-token-injected means the platform adds the identity token to the request and maze sends none; remove %s", source)
 	}
 	return nil
 }
@@ -407,86 +422,102 @@ func githubOutputNameReserved(name string) bool {
 	}
 }
 
-func resolveProvider(config Config, env ci.LookupEnv) (ci.Provider, error) {
+func resolveIdentitySource(config Config, env ci.LookupEnv) (ResolvedConfig, error) {
 	requested, err := ci.ParseProvider(config.Provider)
 	if err != nil {
-		return "", err
+		return ResolvedConfig{}, err
 	}
-	if requested != ci.ProviderAuto {
-		return requested, nil
+	resolved := ResolvedConfig{Config: config, ProviderValue: requested, ProviderNamed: requested != ci.ProviderAuto}
+	if resolved.ProviderNamed || config.IdentityInjected {
+		return resolved, nil
 	}
 	detected, found, err := ci.DetectProvider(env)
 	if err != nil {
-		return "", err
+		return ResolvedConfig{}, err
 	}
 	if found {
-		return detected, nil
+		resolved.ProviderValue = detected
+		return resolved, nil
 	}
-	if hasManualTokenSource(config, env) {
-		return ci.ProviderManual, nil
+	if suppliedTokenSource(config, env) != "" {
+		return resolved, nil
 	}
-	return "", fmt.Errorf(`No CI provider was detected and no OIDC token was supplied.
-Run inside GitHub Actions, GitLab CI/CD, or CircleCI. On another platform, pass --provider oidc and its identity token with --oidc-token-stdin, --oidc-token-file, or %s.`, config.OIDCTokenEnv)
+	return ResolvedConfig{}, fmt.Errorf(`No built-in platform was detected and no identity token was supplied.
+On GitHub Actions and CircleCI, maze requests the job's identity token itself. On any other platform, pass the identity token it issued to this job with --identity-token-stdin, --identity-token-file, or %s, or pass --identity-token-injected when the platform adds it to the request.`, config.OIDCTokenEnv)
 }
 
-func acquireOIDCToken(ctx context.Context, config ResolvedConfig, deps Dependencies) (string, error) {
+// acquireIdentityToken obtains the job's identity token and the provider the
+// request names: the one the caller named, or the built-in platform whose own
+// mechanism maze used. A supplied or injected token names none, so its
+// issuer selects the provider.
+func acquireIdentityToken(ctx context.Context, config ResolvedConfig, deps Dependencies) (string, string, error) {
+	if config.IdentityInjected {
+		return "", "", nil
+	}
+	named := ""
+	if config.ProviderNamed {
+		named = string(config.ProviderValue)
+	}
 	if config.OIDCTokenFile != "" {
-		return ci.ReadTokenFile(config.OIDCTokenFile)
+		token, err := ci.ReadTokenFile(config.OIDCTokenFile)
+		return token, named, err
 	}
 	if config.OIDCTokenStdin {
-		return ci.ReadTokenStdin(deps.Stdin)
+		token, err := ci.ReadTokenStdin(deps.Stdin)
+		return token, named, err
 	}
-
-	env := deps.Env
-	if env == nil {
-		env = ci.DefaultLookupEnv
+	env := lookupEnv(deps)
+	if config.ProviderValue == ci.ProviderGitHub {
+		token, err := requestGitHubToken(ctx, config, deps, env)
+		return token, string(ci.ProviderGitHub), err
 	}
-	switch config.ProviderValue {
-	case ci.ProviderGitHub:
-		httpClient := deps.HTTPClient
-		if httpClient == nil {
-			httpClient = &http.Client{Timeout: config.Timeout}
-		}
-		return ci.RequestGitHubOIDCToken(ctx, config.Audience, env, httpClient)
-	case ci.ProviderGitLab:
-		if token, _, ok := ci.ReadTokenEnv(env, config.OIDCTokenEnv, "PACKAGEMAZE_OIDC_TOKEN"); ok {
-			return token, nil
-		}
-		return "", fmt.Errorf(`GitLab CI/CD was detected, but no OIDC token was found.
-Add this to your job:
-id_tokens:
-  %s:
-    aud: %s`, config.OIDCTokenEnv, config.Audience)
-	case ci.ProviderCircleCI:
-		if token, _, ok := ci.ReadTokenEnv(env, config.OIDCTokenEnv, "PACKAGEMAZE_OIDC_TOKEN"); ok {
-			return token, nil
-		}
-		return ci.RequestCircleCIToken(ctx, config.Audience, deps.LookPath, deps.CommandRunner)
-	case ci.ProviderOIDC:
-		if token, _, ok := ci.ReadTokenEnv(env, config.OIDCTokenEnv, "PACKAGEMAZE_OIDC_TOKEN"); ok {
-			return token, nil
-		}
-		return "", fmt.Errorf(`--provider oidc needs the identity token your platform issued to this job.
-Request it for audience %s, then pass it with --oidc-token-stdin, --oidc-token-file, or %s.`, config.Audience, config.OIDCTokenEnv)
-	case ci.ProviderManual:
-		if token, _, ok := ci.ReadTokenEnv(env, config.OIDCTokenEnv, "PACKAGEMAZE_OIDC_TOKEN"); ok {
-			return token, nil
-		}
-		return "", fmt.Errorf(`Manual OIDC token exchange requires a token.
-Pass one with --oidc-token-stdin, --oidc-token-file, or %s.`, config.OIDCTokenEnv)
-	default:
-		return "", fmt.Errorf("provider must be auto, github, gitlab, circleci, oidc, or manual")
+	if token, _, ok := ci.ReadTokenEnv(env, identityTokenEnvNames(config.Config)...); ok {
+		return token, named, nil
 	}
+	if config.ProviderValue == ci.ProviderCircleCI {
+		token, err := ci.RequestCircleCIToken(ctx, config.Audience, deps.LookPath, deps.CommandRunner)
+		return token, string(ci.ProviderCircleCI), err
+	}
+	return "", "", missingIdentityTokenError(config)
 }
 
-func hasManualTokenSource(config Config, env ci.LookupEnv) bool {
-	if config.OIDCTokenFile != "" || config.OIDCTokenStdin {
-		return true
+func requestGitHubToken(ctx context.Context, config ResolvedConfig, deps Dependencies, env ci.LookupEnv) (string, error) {
+	httpClient := deps.HTTPClient
+	if httpClient == nil {
+		httpClient = &http.Client{Timeout: config.Timeout}
 	}
-	if _, _, ok := ci.ReadTokenEnv(env, firstNonEmpty(config.OIDCTokenEnv, DefaultOIDCTokenEnv), "PACKAGEMAZE_OIDC_TOKEN"); ok {
-		return true
+	return ci.RequestGitHubOIDCToken(ctx, config.Audience, env, httpClient)
+}
+
+func missingIdentityTokenError(config ResolvedConfig) error {
+	if config.ProviderValue == ci.ProviderOIDC {
+		return fmt.Errorf(`--provider oidc needs the identity token your platform issued to this job.
+Request it for audience %s, then pass it with --identity-token-stdin, --identity-token-file, or %s.`, config.Audience, config.OIDCTokenEnv)
 	}
-	return false
+	return fmt.Errorf(`--provider manual is for local development and needs an identity token.
+Pass one with --identity-token-stdin, --identity-token-file, or %s.`, config.OIDCTokenEnv)
+}
+
+// identityTokenEnvNames lists the variables read for a supplied identity
+// token, in order: the named one (MAZE_OIDC_TOKEN unless --identity-token-env
+// says otherwise), then MAZE_IDENTITY_TOKEN, then the legacy name.
+func identityTokenEnvNames(config Config) []string {
+	return []string{firstNonEmpty(config.OIDCTokenEnv, DefaultOIDCTokenEnv), IdentityTokenEnv, legacyOIDCTokenEnv}
+}
+
+// suppliedTokenSource names where the caller supplied an identity token, or
+// returns "" when they supplied none.
+func suppliedTokenSource(config Config, env ci.LookupEnv) string {
+	if config.OIDCTokenFile != "" {
+		return "--identity-token-file"
+	}
+	if config.OIDCTokenStdin {
+		return "--identity-token-stdin"
+	}
+	if _, name, ok := ci.ReadTokenEnv(env, identityTokenEnvNames(config)...); ok {
+		return name
+	}
+	return ""
 }
 
 func envValue(env ci.LookupEnv, key string) string {

@@ -43,16 +43,6 @@ func TestResolveValidation(t *testing.T) {
 			wantErr: "only one --feed is supported when --purpose publish",
 		},
 		{
-			name:    "several feeds as shell output",
-			config:  Config{Provider: "manual", Feeds: []string{"your-org/npm", "your-org/pypi"}, Purpose: "install", Format: "shell"},
-			wantErr: "only one --feed is supported when --format shell; use --format token or json",
-		},
-		{
-			name:    "several feeds as GitHub output",
-			config:  Config{Provider: "manual", Feeds: []string{"your-org/npm", "your-org/pypi"}, Purpose: "install", Format: "github-output"},
-			wantErr: "only one --feed is supported when --format github-output; use --format token or json",
-		},
-		{
 			name:    "invalid purpose",
 			config:  Config{Provider: "manual", Feeds: []string{"your-org/npm"}, Purpose: "deploy"},
 			wantErr: "--purpose",
@@ -351,14 +341,16 @@ func TestExchangeRejectsInvalidClientContext(t *testing.T) {
 	}
 }
 
-func TestExchangeGitLabMissingTokenPrintsSnippet(t *testing.T) {
-	_, _, err := Exchange(context.Background(), Config{
-		Feeds:    []string{"your-org/npm"},
-		Purpose:  "install",
-		Provider: "gitlab",
-	}, Dependencies{Env: mapLookup(nil)})
-	if err == nil || !strings.Contains(err.Error(), "id_tokens") {
-		t.Fatalf("expected GitLab snippet, got %v", err)
+func TestResolveAcceptsSeveralFeedsForEveryOutputFormat(t *testing.T) {
+	for _, format := range []string{"token", "json", "shell", "github-output"} {
+		t.Run(format, func(t *testing.T) {
+			_, err := Resolve(Config{
+				Provider: "manual", Feeds: []string{"your-org/npm", "your-org/pypi"}, Purpose: "install", Format: format,
+			}, Dependencies{Env: mapLookup(map[string]string{"GITHUB_ACTIONS": "true", "GITHUB_OUTPUT": "/tmp/out"})})
+			if err != nil {
+				t.Fatalf("Resolve: %v", err)
+			}
+		})
 	}
 }
 
@@ -457,7 +449,7 @@ func TestExchangeOIDCProviderWithoutTokenSaysWhatToPass(t *testing.T) {
 	if exchanger.called {
 		t.Fatalf("backend was called without a token")
 	}
-	for _, want := range []string{"https://api.packagemaze.com", "--oidc-token-stdin", "MAZE_OIDC_TOKEN"} {
+	for _, want := range []string{"https://api.packagemaze.com", "--identity-token-stdin", "MAZE_OIDC_TOKEN"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error %q does not mention %q", err.Error(), want)
 		}

@@ -237,3 +237,90 @@ func TestWriteGitHubOutputRejectsUnsafeOutputValues(t *testing.T) {
 		t.Fatalf("output file = %q, want empty", string(content))
 	}
 }
+
+func TestWriteShellOneFeedIsUnchanged(t *testing.T) {
+	var stdout bytes.Buffer
+	if err := Write(testResult(), WriteConfig{Format: FormatShell, Stdout: &stdout}); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	want := "export MAZE_TOKEN='maze_ci_secret'\n" +
+		"export MAZE_TOKEN_EXPIRES_AT='2026-06-08T12:30:00Z'\n" +
+		"export MAZE_FEED='your-org/npm'\n" +
+		"export MAZE_FEED_BASE_URL='https://pkg.packagemaze.com/your-org/npm'\n" +
+		"export MAZE_PURPOSE='install'\n" +
+		"export MAZE_ARTIFACT_PROTOCOL='npm'\n" +
+		"export MAZE_BUILD_NUMBER='482'\n" +
+		"export MAZE_BUILD_URL='https://www.packagemaze.com/your-org/builds/482'\n"
+	if stdout.String() != want {
+		t.Fatalf("stdout =\n%s\nwant\n%s", stdout.String(), want)
+	}
+}
+
+func severalFeedsResult() Result {
+	result := testResult()
+	result.Feed = ""
+	result.FeedBaseURL = ""
+	result.ArtifactProtocol = ""
+	result.Feeds = json.RawMessage(`[{"artifact_protocol":"npm","feed":"your-org/npm","feed_base_url":"https://pkg.packagemaze.com/your-org/npm"},{"artifact_protocol":"pypi","feed":"your-org/pypi","feed_base_url":"https://pkg.packagemaze.com/your-org/pypi"}]`)
+	result.FeedReferences = []string{"your-org/npm", "your-org/pypi"}
+	return result
+}
+
+func TestWriteShellSeveralFeedsExportsTheirReferences(t *testing.T) {
+	var stdout bytes.Buffer
+	if err := Write(severalFeedsResult(), WriteConfig{Format: FormatShell, Stdout: &stdout}); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	want := "export MAZE_TOKEN='maze_ci_secret'\n" +
+		"export MAZE_TOKEN_EXPIRES_AT='2026-06-08T12:30:00Z'\n" +
+		"export MAZE_FEEDS='your-org/npm your-org/pypi'\n" +
+		"export MAZE_PURPOSE='install'\n" +
+		"export MAZE_BUILD_NUMBER='482'\n" +
+		"export MAZE_BUILD_URL='https://www.packagemaze.com/your-org/builds/482'\n"
+	if stdout.String() != want {
+		t.Fatalf("stdout =\n%s\nwant\n%s", stdout.String(), want)
+	}
+}
+
+func TestWriteGitHubOutputSeveralFeedsAddsTheirReferences(t *testing.T) {
+	var stdout bytes.Buffer
+	outputPath := filepath.Join(t.TempDir(), "github-output")
+	if err := Write(severalFeedsResult(), WriteConfig{
+		Format:           FormatGitHubOutput,
+		OutputName:       "package_token",
+		GitHubOutputPath: outputPath,
+		Stdout:           &stdout,
+	}); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	content, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read output file: %v", err)
+	}
+	want := "package_token=maze_ci_secret\n" +
+		`package_token-feeds=["your-org/npm","your-org/pypi"]` + "\n" +
+		"build_number=482\n" +
+		"build_url=https://www.packagemaze.com/your-org/builds/482\n"
+	if string(content) != want {
+		t.Fatalf("output file =\n%s\nwant\n%s", content, want)
+	}
+	if stdout.String() != "::add-mask::maze_ci_secret\n" {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+}
+
+func TestWriteJSONOmitsAProviderTheRequestDidNotName(t *testing.T) {
+	result := testResult()
+	result.Provider = ""
+	var stdout bytes.Buffer
+	if err := Write(result, WriteConfig{Format: FormatJSON, Stdout: &stdout}); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if _, exists := payload["provider"]; exists {
+		t.Fatalf("provider should be omitted: %s", stdout.String())
+	}
+}
