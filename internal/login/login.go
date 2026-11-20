@@ -169,7 +169,6 @@ func announce(deps Dependencies, config Config, started Started) {
 		fmt.Fprintln(deps.Stderr, "Open this URL in a browser where you are signed in to PackageMaze, and approve the Token:")
 	}
 	fmt.Fprintln(deps.Stderr, url)
-	fmt.Fprintf(deps.Stderr, "When the page asks, type this code: %s\n", started.UserCode)
 	fmt.Fprintln(deps.Stderr, "Waiting for approval...")
 }
 
