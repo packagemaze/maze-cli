@@ -92,8 +92,15 @@ type NotChecked struct {
 type TokenStatus struct {
 	Env               string              `json:"env"`
 	Present           bool                `json:"present"`
-	Source            *tokensource.Origin `json:"source,omitempty"`
+	EnvEmpty          bool                `json:"env_empty,omitempty"`
+	Organizations     []OrganizationToken `json:"organizations,omitempty"`
 	ClientCredentials []string            `json:"client_credentials,omitempty"`
+}
+
+// OrganizationToken says which Token the Feeds of one Organization use; no Source means none.
+type OrganizationToken struct {
+	Organization string              `json:"organization"`
+	Source       *tokensource.Origin `json:"source,omitempty"`
 }
 
 type FeedReport struct {

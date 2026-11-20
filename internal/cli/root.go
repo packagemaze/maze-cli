@@ -298,7 +298,7 @@ func newPublishCommand(authDeps auth.Dependencies, publishDeps publishcmd.Depend
 	return command
 }
 
-const profileFlagHelp = "Profile saved by maze auth login to read the Token from when the Token variable is unset (default: the one profile saved for the Feed's Organization). In CI a profile is read only when this is given"
+const profileFlagHelp = "Profile saved by maze auth login to read the Token from when the Token variable is unset for its own Organization's Feeds (default: the one profile saved for each Feed's Organization). In CI a profile is read only when this is given"
 
 func newDoctorCommand(authDeps auth.Dependencies, doctorDeps doctor.Dependencies) *cobra.Command {
 	var config doctor.Config
@@ -328,7 +328,7 @@ func newDoctorCommand(authDeps auth.Dependencies, doctorDeps doctor.Dependencies
 			if err != nil {
 				return err
 			}
-			if err := doctor.Write(report, resolved.FormatValue, cmd.OutOrStdout(), resolved.Token); err != nil {
+			if err := doctor.Write(report, resolved.FormatValue, cmd.OutOrStdout(), resolved.Tokens...); err != nil {
 				return err
 			}
 			return report.FailureError()

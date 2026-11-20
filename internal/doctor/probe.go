@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/packagemaze/maze-cli/internal/endpoint"
+	"github.com/packagemaze/maze-cli/internal/tokensource"
 	"github.com/packagemaze/maze-cli/internal/version"
 )
 
@@ -130,7 +131,7 @@ func (p *HTTPProber) Probe(ctx context.Context, request ProbeRequest) ProbeResul
 // probeCheck turns one probe into the check a person or agent acts on. A
 // rejected Token is reported as exactly that: PackageMaze deliberately does not
 // tell package clients whether a Token is revoked, expired, or for another Feed.
-func probeCheck(result ProbeResult, feed Feed, protocol ArtifactProtocol, using tokenUse) Check {
+func probeCheck(result ProbeResult, feed Feed, protocol ArtifactProtocol, source tokensource.Source) Check {
 	target := probeURL(feed, protocol)
 	switch result.Outcome {
 	case ProbeAccepted:
@@ -141,15 +142,15 @@ func probeCheck(result ProbeResult, feed Feed, protocol ArtifactProtocol, using 
 		return check(
 			"read_token_ready",
 			StatusPass,
-			fmt.Sprintf("PackageMaze accepts %s for reads from Feed %s%s (%s answered HTTP 200).", using.label(), feed.Slug(), as, target),
+			fmt.Sprintf("PackageMaze accepts %s for reads from Feed %s%s (%s answered HTTP 200).", source.Label(), feed.Slug(), as, target),
 			"No action needed.",
 		).forFeed(feed)
 	case ProbeTokenRejected:
 		return check(
 			"read_token_rejected",
 			StatusFail,
-			fmt.Sprintf("PackageMaze rejected %s for Feed %s (HTTP %d from %s). PackageMaze does not say why: the Token may be revoked, expired, created for another Feed, or without Read access.", using.label(), feed.Slug(), result.StatusCode, target),
-			using.rejectedFix(feed),
+			fmt.Sprintf("PackageMaze rejected %s for Feed %s (HTTP %d from %s). PackageMaze does not say why: the Token may be revoked, expired, created for another Feed, or without Read access.", source.Label(), feed.Slug(), result.StatusCode, target),
+			rejectedFix(source, feed),
 		).forFeed(feed)
 	case ProbeFeedNotFound:
 		return check(
@@ -191,4 +192,11 @@ func probeCheck(result ProbeResult, feed Feed, protocol ArtifactProtocol, using 
 			"Run maze doctor again; if it persists, report the response to PackageMaze support.",
 		).forFeed(feed)
 	}
+}
+
+func rejectedFix(source tokensource.Source, feed Feed) string {
+	if source.Kind == tokensource.KindProfile {
+		return fmt.Sprintf("Run maze auth login --org %s --profile %s to replace that Token with one that can read Feed %s. See %s", source.Organization, source.Name, feed.Slug(), DocsFixAFailingInstall)
+	}
+	return fmt.Sprintf("Create a new Token with Read access to Feed %s, or rotate the existing one, and set %s to its Secret. See %s", feed.Slug(), source.Name, DocsFixAFailingInstall)
 }

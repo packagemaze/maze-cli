@@ -16,18 +16,20 @@ func redactURL(value string) string {
 	trimmed := strings.TrimSpace(value)
 	parsed, err := url.Parse(trimmed)
 	if err != nil || parsed.User == nil {
-		return redactText(trimmed, "")
+		return redactText(trimmed)
 	}
 	parsed.User = nil
 	return parsed.String()
 }
 
 // redactText removes every PackageMaze Token Secret shape and the exact
-// configured Token value from text destined for stdout or stderr.
-func redactText(value string, tokenValue string) string {
+// configured Token values from text destined for stdout or stderr.
+func redactText(value string, tokenValues ...string) string {
 	result := tokenSecretPattern.ReplaceAllString(value, redacted)
-	if secret := strings.TrimSpace(tokenValue); secret != "" {
-		result = strings.ReplaceAll(result, secret, redacted)
+	for _, tokenValue := range tokenValues {
+		if secret := strings.TrimSpace(tokenValue); secret != "" {
+			result = strings.ReplaceAll(result, secret, redacted)
+		}
 	}
 	return result
 }

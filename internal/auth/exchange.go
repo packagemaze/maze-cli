@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	DefaultBaseURL              = endpoint.DefaultBaseURL
+	DefaultBaseURL              = "https://api.packagemaze.com"
 	DefaultOIDCTokenEnv         = "MAZE_OIDC_TOKEN"
 	IdentityTokenEnv            = "MAZE_IDENTITY_TOKEN"
 	legacyOIDCTokenEnv          = "PACKAGEMAZE_OIDC_TOKEN"

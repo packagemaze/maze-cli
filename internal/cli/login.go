@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -28,9 +29,14 @@ func newLoginCommand(deps auth.Dependencies, loginDeps login.Dependencies) *cobr
 				env = auth.DefaultDependencies().Env
 			}
 			if config.APIURL == "" {
-				config.APIURL = endpoint.ResolveAPIURL(baseURL, env)
+				base, _ := env("MAZE_BASE_URL")
+				config.APIURL = strings.TrimRight(firstSet(baseURL, base, auth.DefaultBaseURL), "/") + "/v1"
 			}
 			if err := endpoint.ValidateURL("api-url", config.APIURL, config.AllowInsecureLocalhost); err != nil {
+				return err
+			}
+			config.PackageClientURL = endpoint.ResolvePackageClientURL(config.PackageClientURL, env)
+			if err := endpoint.ValidateURL("package-client-url", config.PackageClientURL, config.AllowInsecureLocalhost); err != nil {
 				return err
 			}
 			runDeps := loginDeps
@@ -55,6 +61,7 @@ func newLoginCommand(deps auth.Dependencies, loginDeps login.Dependencies) *cobr
 	flags.BoolVar(&config.NoBrowser, "no-browser", false, "Print the approval URL without opening a browser")
 	flags.StringVar(&baseURL, "base-url", "", "PackageMaze API Domain base URL (default: MAZE_BASE_URL, else https://api.packagemaze.com)")
 	flags.StringVar(&config.APIURL, "api-url", "", "Full PackageMaze API root URL override (default: {base-url}/v1)")
+	flags.StringVar(&config.PackageClientURL, "package-client-url", "", endpoint.PackageClientURLFlagHelp+"; saved with the profile so maze publish and maze doctor use it only there")
 	flags.BoolVar(&config.AllowInsecureLocalhost, "allow-insecure-localhost", false, "Allow http URLs only for localhost development")
 	_ = command.MarkFlagRequired("org")
 	return command
@@ -65,4 +72,13 @@ func organizationLabel(organization login.Organization) string {
 		return organization.Slug
 	}
 	return fmt.Sprintf("%s (%s)", organization.Name, organization.Slug)
+}
+
+func firstSet(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }

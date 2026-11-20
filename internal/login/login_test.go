@@ -94,7 +94,7 @@ func run(t *testing.T, fake *fakeServer, config Config) (Result, string, string,
 
 func TestLoginSavesTheApprovedTokenToAProfileAndVerifiesIt(t *testing.T) {
 	fake := &fakeServer{collectAnswers: []func(http.ResponseWriter){pending, pending, collected}}
-	result, configDir, stderr, err := run(t, fake, Config{Organization: "acme", Feeds: []string{"acme/npm"}})
+	result, configDir, stderr, err := run(t, fake, Config{Organization: "acme", Feeds: []string{"acme/npm"}, PackageClientURL: "https://pkg.packagemaze.com"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,6 +128,9 @@ func TestLoginSavesTheApprovedTokenToAProfileAndVerifiesIt(t *testing.T) {
 	var file credentialsFile
 	if err := json.Unmarshal(content, &file); err != nil || file.Profiles["acme"].Token != secret {
 		t.Fatalf("profile not saved: %s", content)
+	}
+	if saved := file.Profiles["acme"]; saved.PackageClientURL != "https://pkg.packagemaze.com" || saved.Organization != "acme" {
+		t.Fatalf("profile = %+v", saved)
 	}
 }
 

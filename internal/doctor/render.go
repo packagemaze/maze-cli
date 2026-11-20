@@ -27,7 +27,7 @@ func ParseFormat(value string) (Format, error) {
 
 // Write renders the report. Everything passes through redaction once more at
 // the boundary so no code path can print a Token Secret.
-func Write(report Report, format Format, writer io.Writer, tokenValue string) error {
+func Write(report Report, format Format, writer io.Writer, tokenValues ...string) error {
 	if writer == nil {
 		writer = io.Discard
 	}
@@ -44,7 +44,7 @@ func Write(report Report, format Format, writer io.Writer, tokenValue string) er
 	default:
 		return fmt.Errorf("format must be markdown or json")
 	}
-	_, err := io.WriteString(writer, redactText(rendered, tokenValue))
+	_, err := io.WriteString(writer, redactText(rendered, tokenValues...))
 	return err
 }
 
@@ -128,12 +128,19 @@ func tokenSentence(token TokenStatus) string {
 	credentials := strings.Join(token.ClientCredentials, ", ")
 	switch {
 	case token.Present && credentials != "":
-		return fmt.Sprintf("%s Package-client credential variables also set: %s.", tokenPresentSentence(token), credentials)
+		return fmt.Sprintf("%s Package-client credential variables also set: %s.", tokenSourceSentence(token), credentials)
 	case token.Present:
-		return tokenPresentSentence(token)
+		return tokenSourceSentence(token)
 	case credentials != "":
-		return fmt.Sprintf("%s is not set. Package-client credential variables set: %s.", token.Env, credentials)
+		return fmt.Sprintf("%s Package-client credential variables set: %s.", tokenMissingSentence(token), credentials)
 	default:
-		return fmt.Sprintf("%s is not set, and no package-client credential variable is set.", token.Env)
+		return fmt.Sprintf("%s No package-client credential variable is set.", tokenMissingSentence(token))
 	}
+}
+
+func tokenMissingSentence(token TokenStatus) string {
+	if token.EnvEmpty {
+		return fmt.Sprintf("%s is set but empty, so it holds no Token.", token.Env)
+	}
+	return fmt.Sprintf("%s is not set.", token.Env)
 }
