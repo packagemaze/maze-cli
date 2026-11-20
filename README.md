@@ -25,6 +25,10 @@ maze publish dist/* --feed <organization>/<feed>
 ```
 
 `maze doctor` diagnoses a repository's PackageMaze setup without changing it.
+`maze auth login` gets a person's machine a Token: it opens PackageMaze in the
+browser, waits while you approve the request there, saves the Token to a
+profile in your user config directory (`packagemaze/credentials.json`, mode
+0600) and verifies it. It prints the Organization and profile, never the Token.
 `maze auth exchange-oidc` exchanges a CI OIDC identity token for a short-lived
 PackageMaze Token. `maze auth show-identity` prints the claims in the job's
 identity token without signing in. `maze publish` sends local artifact facts

@@ -11,6 +11,7 @@ import (
 	"github.com/packagemaze/maze-cli/internal/doctor"
 	"github.com/packagemaze/maze-cli/internal/endpoint"
 	"github.com/packagemaze/maze-cli/internal/identity"
+	"github.com/packagemaze/maze-cli/internal/login"
 	"github.com/packagemaze/maze-cli/internal/output"
 	publishcmd "github.com/packagemaze/maze-cli/internal/publish"
 	"github.com/packagemaze/maze-cli/internal/version"
@@ -58,6 +59,7 @@ func newAuthCommand(deps auth.Dependencies) *cobra.Command {
 		Use:   "auth",
 		Short: "Work with PackageMaze authentication",
 	}
+	authCommand.AddCommand(newLoginCommand(deps, login.DefaultDependencies()))
 	authCommand.AddCommand(newExchangeOIDCCommand(deps))
 	authCommand.AddCommand(newShowIdentityCommand(deps))
 	return authCommand
