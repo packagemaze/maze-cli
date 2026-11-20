@@ -37,7 +37,8 @@ for target in linux/amd64 linux/arm64 darwin/arm64 windows/amd64; do
   if [ "$goos" = "windows" ]; then
     (cd "$work_dir" && zip -q -X "${dist_path}/maze_${platform}.zip" "$binary")
   else
-    tar -C "$work_dir" -czf "${dist_path}/maze_${platform}.tar.gz" "$binary"
+    # macOS tar would add a ._maze AppleDouble entry for the binary's extended attributes.
+    COPYFILE_DISABLE=1 tar -C "$work_dir" -czf "${dist_path}/maze_${platform}.tar.gz" "$binary"
   fi
   rm -rf "$work_dir"
 done
