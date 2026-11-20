@@ -257,6 +257,9 @@ func newPublishCommand(authDeps auth.Dependencies, publishDeps publishcmd.Depend
 			if runDeps.Env == nil {
 				runDeps.Env = authDeps.Env
 			}
+			if runDeps.ConfigDir == nil {
+				runDeps.ConfigDir = authDeps.ConfigDir
+			}
 			if runDeps.Env == nil {
 				runDeps.Env = auth.DefaultDependencies().Env
 			}
@@ -280,6 +283,7 @@ func newPublishCommand(authDeps auth.Dependencies, publishDeps publishcmd.Depend
 	flags.StringVar(&config.PackageClientURL, "package-client-url", "", endpoint.PackageClientURLFlagHelp)
 	flags.StringVar(&config.Feed, "feed", "", "PackageMaze Feed in org/feed form")
 	flags.StringVar(&config.TokenEnv, "token-env", publishcmd.DefaultTokenEnv, "Environment variable containing a PackageMaze Token")
+	flags.StringVar(&config.Profile, "profile", "", profileFlagHelp)
 	flags.StringVar(&config.TokenFile, "token-file", "", "File containing a PackageMaze Token")
 	flags.BoolVar(&config.StdinToken, "token-stdin", false, "Read the PackageMaze Token from stdin")
 	flags.StringVar(&config.PackageHint, "package", "", "Optional package name hint for backend planning")
@@ -294,6 +298,8 @@ func newPublishCommand(authDeps auth.Dependencies, publishDeps publishcmd.Depend
 	return command
 }
 
+const profileFlagHelp = "Profile saved by maze auth login to read the Token from when the Token variable is unset for its own Organization's Feeds (default: the one profile saved for each Feed's Organization). In CI a profile is read only when this is given"
+
 func newDoctorCommand(authDeps auth.Dependencies, doctorDeps doctor.Dependencies) *cobra.Command {
 	var config doctor.Config
 	command := &cobra.Command{
@@ -301,7 +307,7 @@ func newDoctorCommand(authDeps auth.Dependencies, doctorDeps doctor.Dependencies
 		Short: "Diagnose a repository's PackageMaze setup without changing it",
 		Long: "Read the repository's package-client configuration (.npmrc, .yarnrc.yml, bunfig.toml, pnpm-workspace.yaml, package.json, requirements files, pip.conf, pyproject.toml, uv.toml, Pipfile, and GitHub workflows using packagemaze/setup-maze), " +
 			"say which PackageMaze Feed it points at or that none does, and check each setting's shape against the Feed's URLs.\n\n" +
-			"With MAZE_TOKEN set, make one read-only request per Feed to prove the Token is accepted for reads. " +
+			"With a Token (MAZE_TOKEN, or a profile maze auth login saved), make one read-only request per Feed to prove the Token is accepted for reads. " +
 			"The command writes nothing, prints no Token value, and contacts only the PackageMaze Package Client Domain. It exits non-zero only when a check failed.",
 		Example: "  maze doctor\n" +
 			"  maze doctor --format json\n" +
@@ -312,6 +318,9 @@ func newDoctorCommand(authDeps auth.Dependencies, doctorDeps doctor.Dependencies
 			if runDeps.Env == nil {
 				runDeps.Env = authDeps.Env
 			}
+			if runDeps.ConfigDir == nil {
+				runDeps.ConfigDir = authDeps.ConfigDir
+			}
 			if runDeps.HTTPClient == nil {
 				runDeps.HTTPClient = authDeps.HTTPClient
 			}
@@ -319,7 +328,7 @@ func newDoctorCommand(authDeps auth.Dependencies, doctorDeps doctor.Dependencies
 			if err != nil {
 				return err
 			}
-			if err := doctor.Write(report, resolved.FormatValue, cmd.OutOrStdout(), resolved.Token); err != nil {
+			if err := doctor.Write(report, resolved.FormatValue, cmd.OutOrStdout(), resolved.Tokens...); err != nil {
 				return err
 			}
 			return report.FailureError()
@@ -331,6 +340,7 @@ func newDoctorCommand(authDeps auth.Dependencies, doctorDeps doctor.Dependencies
 	flags.StringVar(&config.Format, "format", string(doctor.FormatMarkdown), "Output format: markdown or json")
 	flags.BoolVar(&config.JSONAlias, "json", false, "Alias for --format json")
 	flags.StringVar(&config.TokenEnv, "token-env", endpoint.DefaultTokenEnv, "Environment variable holding the PackageMaze Token to test; its value is never printed")
+	flags.StringVar(&config.Profile, "profile", "", profileFlagHelp)
 	flags.StringVar(&config.PackageClientURL, "package-client-url", "", endpoint.PackageClientURLFlagHelp)
 	flags.BoolVar(&config.Offline, "offline", false, "Skip the live Token check; read files only")
 	flags.DurationVar(&config.Timeout, "timeout", 15*time.Second, "HTTP timeout for the live Token check")

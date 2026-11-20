@@ -13,11 +13,13 @@ var profileNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
 // Profile is one saved sign-in. The file holding it is readable by its owner only.
 type Profile struct {
-	APIURL       string `json:"api_url"`
-	Organization string `json:"organization"`
-	Token        string `json:"token"`
-	TokenID      string `json:"token_id"`
-	ExpiresAt    string `json:"expires_at"`
+	APIURL string `json:"api_url"`
+	// PackageClientURL is the Package Client Domain the Token was saved for.
+	PackageClientURL string `json:"package_client_url,omitempty"`
+	Organization     string `json:"organization"`
+	Token            string `json:"token"`
+	TokenID          string `json:"token_id"`
+	ExpiresAt        string `json:"expires_at"`
 }
 
 type credentialsFile struct {
@@ -35,20 +37,12 @@ func ValidProfileName(name string) bool {
 
 // SaveProfile replaces one profile and keeps the others, writing the file atomically with mode 0600.
 func SaveProfile(path string, name string, profile Profile) error {
-	file := credentialsFile{Profiles: map[string]Profile{}}
-	content, err := os.ReadFile(path)
-	switch {
-	case err == nil:
-		if err := json.Unmarshal(content, &file); err != nil {
-			return fmt.Errorf("%s is not a maze credentials file: %w", path, err)
-		}
-		if file.Profiles == nil {
-			file.Profiles = map[string]Profile{}
-		}
-	case !errors.Is(err, os.ErrNotExist):
+	profiles, err := LoadProfiles(path)
+	if err != nil {
 		return err
 	}
-	file.Profiles[name] = profile
+	profiles[name] = profile
+	file := credentialsFile{Profiles: profiles}
 	encoded, err := json.MarshalIndent(file, "", "  ")
 	if err != nil {
 		return err
@@ -73,4 +67,23 @@ func SaveProfile(path string, name string, profile Profile) error {
 		return err
 	}
 	return os.Rename(temporary.Name(), path)
+}
+
+// LoadProfiles reads every saved profile; a missing file means none.
+func LoadProfiles(path string) (map[string]Profile, error) {
+	content, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return map[string]Profile{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var file credentialsFile
+	if err := json.Unmarshal(content, &file); err != nil {
+		return nil, fmt.Errorf("%s is not a maze credentials file: %w", path, err)
+	}
+	if file.Profiles == nil {
+		return map[string]Profile{}, nil
+	}
+	return file.Profiles, nil
 }

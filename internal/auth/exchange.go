@@ -62,6 +62,8 @@ type Config struct {
 }
 
 type Dependencies struct {
+	// ConfigDir finds the saved maze auth login profiles; nil reads none, which keeps tests off a developer's own.
+	ConfigDir     func() (string, error)
 	Env           ci.LookupEnv
 	Stdin         io.Reader
 	HTTPClient    *http.Client
@@ -550,6 +552,7 @@ func fallback(value string, defaultValue string) string {
 
 func DefaultDependencies() Dependencies {
 	return Dependencies{
+		ConfigDir:     os.UserConfigDir,
 		Env:           ci.DefaultLookupEnv,
 		Stdin:         os.Stdin,
 		LookPath:      ci.DefaultLookPath,

@@ -31,6 +31,15 @@ maze publish dist/* --feed <organization>/<feed>
 browser, waits while you approve the request there, saves the Token to a
 profile in your user config directory (`packagemaze/credentials.json`, mode
 0600) and verifies it. It prints the Organization and profile, never the Token.
+`maze publish` and `maze doctor` use that saved Token when `MAZE_TOKEN` is unset.
+Each Feed gets the profile saved for its own Organization; `--profile <name>`
+picks the profile for its Organization's Feeds only. A profile never serves
+another Organization's Feeds. In CI a profile is read only when `--profile`
+names it. The profile also records the Package Client Domain
+(`--package-client-url` or `MAZE_PACKAGE_CLIENT_URL` at login): `maze publish`
+refuses a profile whose Token expired or that was saved for another Package
+Client Domain, and also refuses a set but empty `MAZE_TOKEN`; `maze doctor`
+warns about all three, and about several profiles for one Organization.
 `maze auth exchange-oidc` exchanges a job's workload identity token for a
 short-lived PackageMaze Token. `maze auth exec` does the same exchange and
 runs a command with its package clients signed in to the Feeds.
@@ -434,8 +443,11 @@ checks are Feed Doctor's vocabulary applied locally:
   `${MAZE_TOKEN}` placeholder is ignored;
 - the pnpm registry description, `permissions.id-token: write` next to
   setup-maze, and workflows minting Tokens for a different Feed;
-- whether `MAZE_TOKEN` (or the variable named with `--token-env`) is set, and
-  exactly what to set and where to get one when it is not.
+- whether `MAZE_TOKEN` (or the variable named with `--token-env`) is set, or
+  which profile `maze auth login` saved each Organization uses (in JSON,
+  `token.organizations` lists `{"organization", "source": {"kind": "env" |
+  "profile", "name"}}`), and
+  exactly what to set and where to get one when neither is.
 
 With a Token set, the command makes one read-only request per configured Feed,
 exactly as that Feed's package client would: `GET <Feed Base URL>-/whoami` with
@@ -444,7 +456,8 @@ with `__token__` Basic credentials for PyPI Feeds. The answer proves the Token
 is accepted for reads (`read_token_ready`), rejected
 (`read_token_rejected`), or that no Feed answers at that address
 (`feed_not_found`). PackageMaze deliberately does not tell package clients why
-a Token was rejected, and the report says so. `--offline` skips the request.
+a Token was rejected, and the report says so. `--offline` skips the request
+and reads no saved profile unless `--profile` names one.
 
 Security notes specific to `maze doctor`:
 

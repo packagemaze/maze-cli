@@ -24,6 +24,7 @@ const (
 
 type Config struct {
 	APIURL                 string
+	PackageClientURL       string
 	Organization           string
 	Feeds                  []string
 	Purpose                string
@@ -72,7 +73,7 @@ func Run(ctx context.Context, config Config, deps Dependencies) (Result, error) 
 		return Result{}, fmt.Errorf("find the user config directory: %w", err)
 	}
 	path := CredentialsPath(configDir)
-	saved := Profile{APIURL: config.APIURL, Organization: collected.Organization.Slug, Token: collected.TokenSecret, TokenID: collected.TokenID, ExpiresAt: collected.ExpiresAt}
+	saved := Profile{APIURL: config.APIURL, PackageClientURL: config.PackageClientURL, Organization: collected.Organization.Slug, Token: collected.TokenSecret, TokenID: collected.TokenID, ExpiresAt: collected.ExpiresAt}
 	if err := SaveProfile(path, profile, saved); err != nil {
 		return Result{}, fmt.Errorf("save profile %s: %w", profile, err)
 	}
