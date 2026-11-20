@@ -60,6 +60,7 @@ func newAuthCommand(deps auth.Dependencies) *cobra.Command {
 	}
 	authCommand.AddCommand(newExchangeOIDCCommand(deps))
 	authCommand.AddCommand(newShowIdentityCommand(deps))
+	authCommand.AddCommand(newAuthExecCommand(deps, defaultExecDependencies()))
 	return authCommand
 }
 
@@ -113,6 +114,13 @@ func newExchangeOIDCCommand(deps auth.Dependencies) *cobra.Command {
 			})
 		},
 	}
+	bindExchangeFlags(command, &config, &reportedRef, &reportedCommit)
+	return command
+}
+
+// bindExchangeFlags registers the flags every command that exchanges an
+// identity token for a PackageMaze Token shares.
+func bindExchangeFlags(command *cobra.Command, config *auth.Config, reportedRef *string, reportedCommit *string) {
 	flags := command.Flags()
 	flags.StringVar(&config.BaseURL, "base-url", "", "PackageMaze API Domain base URL (default: MAZE_BASE_URL, else https://api.packagemaze.com)")
 	flags.StringVar(&config.APIURL, "api-url", "", "Full PackageMaze API root URL override (default: {base-url}/v1)")
@@ -124,8 +132,8 @@ func newExchangeOIDCCommand(deps auth.Dependencies) *cobra.Command {
 	bindIdentityTokenFlags(command, &config.OIDCTokenEnv, &config.OIDCTokenFile, &config.OIDCTokenStdin)
 	flags.BoolVar(&config.IdentityInjected, "identity-token-injected", false, "The platform adds this job's identity token to the exchange request as an Authorization Bearer header, so maze sends none and names no provider")
 	flags.StringVar(&config.SetupInvocationID, "setup-invocation-id", "", "Unverified non-secret wrapper invocation id (default: MAZE_SETUP_INVOCATION_ID)")
-	flags.StringVar(&reportedRef, "ref", "", reportedFlagHelp("git ref"))
-	flags.StringVar(&reportedCommit, "commit", "", reportedFlagHelp("git commit"))
+	flags.StringVar(reportedRef, "ref", "", reportedFlagHelp("git ref"))
+	flags.StringVar(reportedCommit, "commit", "", reportedFlagHelp("git commit"))
 	flags.StringVar(&config.ClientContextJSON, "client-context-json", "", "Legacy caller-supplied, unverified client metadata JSON accepted for compatibility")
 	flags.StringVar(&config.Format, "format", string(output.FormatToken), "Output format: token, json, shell, or github-output")
 	flags.StringVar(&config.OutputName, "output-name", auth.DefaultOutputName, "Output name when --format github-output")
@@ -138,7 +146,6 @@ func newExchangeOIDCCommand(deps auth.Dependencies) *cobra.Command {
 	_ = flags.MarkHidden("allow-github-output-outside-actions")
 	_ = command.MarkFlagRequired("feed")
 	_ = command.MarkFlagRequired("purpose")
-	return command
 }
 
 const providerFlagHelp = "Provider to name: auto, github, circleci, oidc, or manual. auto names github or circleci only when maze requests the identity token from that platform itself, and otherwise lets the token's issuer select one; manual is for local development only"

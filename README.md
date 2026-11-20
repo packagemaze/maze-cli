@@ -20,14 +20,17 @@ The implemented commands are:
 ```sh
 maze doctor
 maze auth exchange-oidc
+maze auth exec -- <command>
 maze auth show-identity
 maze publish dist/* --feed <organization>/<feed>
 ```
 
 `maze doctor` diagnoses a repository's PackageMaze setup without changing it.
 `maze auth exchange-oidc` exchanges a job's workload identity token for a
-short-lived PackageMaze Token. `maze auth show-identity` prints the claims in
-the job's identity token without signing in. `maze publish` sends local artifact facts
+short-lived PackageMaze Token. `maze auth exec` does the same exchange and
+runs a command with its package clients signed in to the Feeds.
+`maze auth show-identity` prints the claims in the job's identity token
+without signing in. `maze publish` sends local artifact facts
 to PackageMaze, executes the returned backend plan, uploads bytes, and waits for Publish
 Finalization by default. Local and staging development use the normal endpoint
 overrides.
@@ -238,6 +241,61 @@ printf '%s' "$OIDC_TOKEN" | maze auth exchange-oidc \
   --purpose install \
   --format json
 ```
+
+## Run A Command With Feed Access
+
+`maze auth exec` takes every `maze auth exchange-oidc` flag, including
+repeated `--feed`, then runs the command after `--` with temporary
+package-client configuration for each Feed the Token covers:
+
+```sh
+maze auth exec --feed <organization>/<feed> --purpose install -- npm ci
+maze auth exec \
+  --feed <organization>/<npm-feed> --feed <organization>/<pypi-feed> \
+  --purpose install -- make install
+```
+
+For npm Feeds it writes a private npm user config, in a new directory only
+you can open (mode `0700`, file `0600`), and points `NPM_CONFIG_USERCONFIG`
+at it, which npm and pnpm read:
+
+```ini
+registry=https://pkg.packagemaze.com/<organization>/<npm-feed>/
+replace-registry-host=npmjs
+//pkg.packagemaze.com/<organization>/<npm-feed>/:_authToken=${MAZE_TOKEN}
+```
+
+The first npm Feed is the default registry; every npm Feed gets its own
+Feed-URL-scoped credential line. It also sets `COREPACK_NPM_REGISTRY` and
+`COREPACK_NPM_TOKEN` for Corepack, for the first npm Feed only, because
+Corepack reads one registry. It sets nothing for Yarn Berry, whose only
+environment token is not scoped to a URL: name the Feed under `npmRegistries`
+in the project's `.yarnrc.yml` with `npmAuthToken: "${MAZE_TOKEN}"`, which
+`maze auth exec` exports. The command does not read your own npm user config,
+and an inherited `NPM_CONFIG_REGISTRY` is removed because it would outrank
+every npmrc file.
+
+For PyPI Feeds it sets `PIP_INDEX_URL` and `UV_DEFAULT_INDEX` to the first
+Feed's Simple URL, `https://__token__:<Token>@pkg.packagemaze.com/<organization>/<feed>/simple/`,
+and, for more PyPI Feeds, `PIP_EXTRA_INDEX_URL` and `UV_INDEX` to the others.
+pip merges every index; uv searches the extra ones, in `--feed` order, before
+the default one. Inherited `PIP_EXTRA_INDEX_URL` and `UV_INDEX` are removed
+when there is one PyPI Feed, and uv's deprecated `UV_INDEX_URL` and
+`UV_EXTRA_INDEX_URL` always are, so the named Feeds are the only indexes.
+
+The command sees the Token as `MAZE_TOKEN` too. The Token is never printed,
+never put in an argument, and never written to a file: the npm user config
+references `${MAZE_TOKEN}`. `maze auth exec` never sets `cafile` or `cert` and
+never changes your own configuration files. `--verbose` names the Feeds and
+the variables set or removed, never a value.
+
+`maze` exits with the command's exit status. It removes the directory when the
+command ends, fails, or stops on a signal: `SIGINT`, `SIGTERM`, and `SIGHUP`
+are passed to the command, and a command a signal stopped exits with 128 plus
+the signal number. A `SIGKILL` leaves the directory behind, without a Token in
+it. A Feed of any other Artifact Protocol, a `--format`, or a missing command
+fails before anything runs. Bun, Poetry, PDM, and PyPI publishing tools are
+not configured.
 
 ## Injected Identity
 
