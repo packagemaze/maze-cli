@@ -22,6 +22,7 @@ import (
 
 	"github.com/packagemaze/maze-cli/internal/ci"
 	mazeendpoint "github.com/packagemaze/maze-cli/internal/endpoint"
+	"github.com/packagemaze/maze-cli/internal/tokensource"
 	"github.com/packagemaze/maze-cli/internal/version"
 )
 
@@ -41,6 +42,7 @@ type Config struct {
 	JSONAlias              bool
 	PackageClientURL       string
 	PackageHint            string
+	Profile                string
 	StdinToken             bool
 	Timeout                time.Duration
 	TokenEnv               string
@@ -53,6 +55,7 @@ type Config struct {
 type Dependencies struct {
 	Client               Client
 	Command              string
+	ConfigDir            func() (string, error)
 	Env                  ci.LookupEnv
 	HTTPClient           *http.Client
 	Now                  func() time.Time
@@ -924,10 +927,21 @@ func acquireToken(config Config, deps Dependencies) (string, error) {
 	if env == nil {
 		env = ci.DefaultLookupEnv
 	}
-	if token, ok := env(config.TokenEnv); ok {
-		return cleanToken(token, config.TokenEnv)
+	organization, _, _ := strings.Cut(config.Feed, "/")
+	source, err := tokensource.Resolve(tokensource.Lookup{
+		ConfigDir:    deps.ConfigDir,
+		Env:          env,
+		Organization: organization,
+		Profile:      config.Profile,
+		TokenEnv:     config.TokenEnv,
+	})
+	if errors.Is(err, tokensource.ErrNotFound) {
+		return "", fmt.Errorf("PackageMaze Token was not found. Set %s, run maze auth login, use --token-file, or use --token-stdin", config.TokenEnv)
 	}
-	return "", fmt.Errorf("PackageMaze Token was not found. Set %s, use --token-file, or use --token-stdin", config.TokenEnv)
+	if err != nil {
+		return "", err
+	}
+	return cleanToken(source.Token, source.Origin)
 }
 
 func cleanToken(value string, source string) (string, error) {

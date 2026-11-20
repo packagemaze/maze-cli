@@ -11,6 +11,7 @@ import (
 
 	"github.com/packagemaze/maze-cli/internal/ci"
 	"github.com/packagemaze/maze-cli/internal/endpoint"
+	"github.com/packagemaze/maze-cli/internal/tokensource"
 )
 
 const maxProbedFeeds = 4
@@ -25,11 +26,13 @@ type Config struct {
 	JSONAlias              bool
 	Offline                bool
 	PackageClientURL       string
+	Profile                string
 	Timeout                time.Duration
 	TokenEnv               string
 }
 
 type Dependencies struct {
+	ConfigDir  func() (string, error)
 	Env        ci.LookupEnv
 	HTTPClient *http.Client
 	Prober     Prober
@@ -43,6 +46,8 @@ type ResolvedConfig struct {
 	FormatValue Format
 	TargetFeed  *Feed
 	Token       string
+	// TokenSource says where Token came from (env MAZE_TOKEN, profile acme); empty when there is none.
+	TokenSource string
 }
 
 func Resolve(config Config, deps Dependencies) (ResolvedConfig, error) {
@@ -81,7 +86,21 @@ func Resolve(config Config, deps Dependencies) (ResolvedConfig, error) {
 		}
 		resolved.TargetFeed = &feed
 	}
-	resolved.Token, _, _ = ci.ReadTokenEnv(env, config.TokenEnv)
+	organization := ""
+	if resolved.TargetFeed != nil {
+		organization = resolved.TargetFeed.Organization
+	}
+	source, err := tokensource.Resolve(tokensource.Lookup{
+		ConfigDir:    deps.ConfigDir,
+		Env:          env,
+		Organization: organization,
+		Profile:      config.Profile,
+		TokenEnv:     config.TokenEnv,
+	})
+	if err != nil && !errors.Is(err, tokensource.ErrNotFound) {
+		return ResolvedConfig{}, err
+	}
+	resolved.Token, resolved.TokenSource = source.Token, source.Origin
 	return resolved, nil
 }
 
@@ -119,7 +138,7 @@ func Run(ctx context.Context, config Config, deps Dependencies) (Report, Resolve
 	}
 	checks := scan.checks
 	checks = append(checks, crossChecks(feeds, scan)...)
-	token := readTokenStatus(deps.Env, resolved.TokenEnv, resolved.Token != "")
+	token := readTokenStatus(deps.Env, resolved.TokenEnv, resolved.TokenSource)
 	checks = append(checks, tokenChecks(token, feeds)...)
 
 	notChecked := project.notes

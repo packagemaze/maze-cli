@@ -31,6 +31,9 @@ maze publish dist/* --feed <organization>/<feed>
 browser, waits while you approve the request there, saves the Token to a
 profile in your user config directory (`packagemaze/credentials.json`, mode
 0600) and verifies it. It prints the Organization and profile, never the Token.
+`maze publish` and `maze doctor` use that saved Token when `MAZE_TOKEN` is unset:
+`--profile <name>`, else the profile named after the Feed's Organization, else
+the only one. In CI they read a profile only when `--profile` names it.
 `maze auth exchange-oidc` exchanges a job's workload identity token for a
 short-lived PackageMaze Token. `maze auth exec` does the same exchange and
 runs a command with its package clients signed in to the Feeds.

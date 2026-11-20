@@ -66,8 +66,8 @@ func readEnvironment(env ci.LookupEnv, domain packageClientDomain) reading {
 	return result
 }
 
-func readTokenStatus(env ci.LookupEnv, tokenEnv string, present bool) TokenStatus {
-	status := TokenStatus{Env: tokenEnv, Present: present}
+func readTokenStatus(env ci.LookupEnv, tokenEnv string, source string) TokenStatus {
+	status := TokenStatus{Env: tokenEnv, Present: source != "", Source: source}
 	for _, name := range clientCredentialVariables {
 		if envValue(env, name) != "" {
 			status.ClientCredentials = append(status.ClientCredentials, name)
@@ -89,7 +89,7 @@ func tokenChecks(status TokenStatus, feeds []FeedReport) []Check {
 		return []Check{check(
 			"token_env_present",
 			StatusPass,
-			fmt.Sprintf("%s is set; its value is never printed.", status.Env),
+			tokenPresentSentence(status),
 			"No action needed.",
 		).at(environmentSourcePrefix + status.Env)}
 	}
@@ -128,4 +128,12 @@ func tokenWiringHint(protocol ArtifactProtocol) string {
 func envValue(env ci.LookupEnv, key string) string {
 	value, _ := env(key)
 	return strings.TrimSpace(value)
+}
+
+// tokenPresentSentence names where the Token came from without printing it.
+func tokenPresentSentence(status TokenStatus) string {
+	if profile, ok := strings.CutPrefix(status.Source, "profile "); ok {
+		return fmt.Sprintf("%s is not set, so the Token saved in profile %s is used; its value is never printed.", status.Env, profile)
+	}
+	return fmt.Sprintf("%s is set; its value is never printed.", status.Env)
 }

@@ -74,3 +74,22 @@ func SaveProfile(path string, name string, profile Profile) error {
 	}
 	return os.Rename(temporary.Name(), path)
 }
+
+// LoadProfiles reads every saved profile; a missing file means none.
+func LoadProfiles(path string) (map[string]Profile, error) {
+	content, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return map[string]Profile{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var file credentialsFile
+	if err := json.Unmarshal(content, &file); err != nil {
+		return nil, fmt.Errorf("%s is not a maze credentials file: %w", path, err)
+	}
+	if file.Profiles == nil {
+		return map[string]Profile{}, nil
+	}
+	return file.Profiles, nil
+}

@@ -128,9 +128,9 @@ func tokenSentence(token TokenStatus) string {
 	credentials := strings.Join(token.ClientCredentials, ", ")
 	switch {
 	case token.Present && credentials != "":
-		return fmt.Sprintf("%s is set; its value is never printed. Package-client credential variables also set: %s.", token.Env, credentials)
+		return fmt.Sprintf("%s Package-client credential variables also set: %s.", tokenPresentSentence(token), credentials)
 	case token.Present:
-		return fmt.Sprintf("%s is set; its value is never printed.", token.Env)
+		return tokenPresentSentence(token)
 	case credentials != "":
 		return fmt.Sprintf("%s is not set. Package-client credential variables set: %s.", token.Env, credentials)
 	default:
