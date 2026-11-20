@@ -3,6 +3,8 @@ package doctor
 import (
 	"sort"
 	"strings"
+
+	"github.com/packagemaze/maze-cli/internal/tokensource"
 )
 
 type Status string
@@ -88,10 +90,10 @@ type NotChecked struct {
 }
 
 type TokenStatus struct {
-	Env               string   `json:"env"`
-	Present           bool     `json:"present"`
-	Source            string   `json:"source,omitempty"`
-	ClientCredentials []string `json:"client_credentials,omitempty"`
+	Env               string              `json:"env"`
+	Present           bool                `json:"present"`
+	Source            *tokensource.Origin `json:"source,omitempty"`
+	ClientCredentials []string            `json:"client_credentials,omitempty"`
 }
 
 type FeedReport struct {

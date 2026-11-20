@@ -929,19 +929,28 @@ func acquireToken(config Config, deps Dependencies) (string, error) {
 	}
 	organization, _, _ := strings.Cut(config.Feed, "/")
 	source, err := tokensource.Resolve(tokensource.Lookup{
-		ConfigDir:    deps.ConfigDir,
-		Env:          env,
-		Organization: organization,
-		Profile:      config.Profile,
-		TokenEnv:     config.TokenEnv,
+		APIURL:        mazeendpoint.ResolveAPIURL("", env),
+		ConfigDir:     deps.ConfigDir,
+		Env:           env,
+		Now:           func() time.Time { return dependencyNow(deps) },
+		Organizations: []string{organization},
+		Profile:       config.Profile,
+		TokenEnv:      config.TokenEnv,
 	})
 	if errors.Is(err, tokensource.ErrNotFound) {
-		return "", fmt.Errorf("PackageMaze Token was not found. Set %s, run maze auth login, use --token-file, or use --token-stdin", config.TokenEnv)
+		return "", fmt.Errorf("PackageMaze Token was not found. Set %s, run maze auth login --org %s, use --token-file, or use --token-stdin", config.TokenEnv, organization)
 	}
 	if err != nil {
 		return "", err
 	}
-	return cleanToken(source.Token, source.Origin)
+	if len(source.Problems) > 0 {
+		return "", fmt.Errorf("maze publish will not use the saved profile: %w", source.Problems[0])
+	}
+	label := source.Name
+	if source.Kind == tokensource.KindProfile {
+		label = "profile " + source.Name
+	}
+	return cleanToken(source.Token, label)
 }
 
 func cleanToken(value string, source string) (string, error) {

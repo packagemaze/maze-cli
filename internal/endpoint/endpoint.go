@@ -13,6 +13,8 @@ import (
 )
 
 const (
+	DefaultBaseURL           = "https://api.packagemaze.com"
+	BaseURLEnv               = "MAZE_BASE_URL"
 	DefaultPackageClientURL  = "https://pkg.packagemaze.com"
 	DefaultTokenEnv          = "MAZE_TOKEN"
 	PackageClientURLEnv      = "MAZE_PACKAGE_CLIENT_URL"
@@ -58,6 +60,19 @@ func ResolvePackageClientURL(flagValue string, env ci.LookupEnv) string {
 		}
 	}
 	return DefaultPackageClientURL
+}
+
+// ResolveAPIURL is the PackageMaze API root: the base URL given, else MAZE_BASE_URL, else the default, plus /v1.
+func ResolveAPIURL(baseURL string, env ci.LookupEnv) string {
+	if env == nil {
+		env = ci.DefaultLookupEnv
+	}
+	for _, candidate := range []string{baseURL, envOrEmpty(env, BaseURLEnv), DefaultBaseURL} {
+		if trimmed := strings.TrimSpace(candidate); trimmed != "" {
+			return strings.TrimRight(trimmed, "/") + "/v1"
+		}
+	}
+	return DefaultBaseURL + "/v1"
 }
 
 func envOrEmpty(env ci.LookupEnv, key string) string {

@@ -11,7 +11,6 @@ import (
 
 	"github.com/packagemaze/maze-cli/internal/ci"
 	"github.com/packagemaze/maze-cli/internal/endpoint"
-	"github.com/packagemaze/maze-cli/internal/tokensource"
 )
 
 const maxProbedFeeds = 4
@@ -35,6 +34,7 @@ type Dependencies struct {
 	ConfigDir  func() (string, error)
 	Env        ci.LookupEnv
 	HTTPClient *http.Client
+	Now        func() time.Time
 	Prober     Prober
 }
 
@@ -46,8 +46,6 @@ type ResolvedConfig struct {
 	FormatValue Format
 	TargetFeed  *Feed
 	Token       string
-	// TokenSource says where Token came from (env MAZE_TOKEN, profile acme); empty when there is none.
-	TokenSource string
 }
 
 func Resolve(config Config, deps Dependencies) (ResolvedConfig, error) {
@@ -86,21 +84,6 @@ func Resolve(config Config, deps Dependencies) (ResolvedConfig, error) {
 		}
 		resolved.TargetFeed = &feed
 	}
-	organization := ""
-	if resolved.TargetFeed != nil {
-		organization = resolved.TargetFeed.Organization
-	}
-	source, err := tokensource.Resolve(tokensource.Lookup{
-		ConfigDir:    deps.ConfigDir,
-		Env:          env,
-		Organization: organization,
-		Profile:      config.Profile,
-		TokenEnv:     config.TokenEnv,
-	})
-	if err != nil && !errors.Is(err, tokensource.ErrNotFound) {
-		return ResolvedConfig{}, err
-	}
-	resolved.Token, resolved.TokenSource = source.Token, source.Origin
 	return resolved, nil
 }
 
@@ -138,8 +121,10 @@ func Run(ctx context.Context, config Config, deps Dependencies) (Report, Resolve
 	}
 	checks := scan.checks
 	checks = append(checks, crossChecks(feeds, scan)...)
-	token := readTokenStatus(deps.Env, resolved.TokenEnv, resolved.TokenSource)
-	checks = append(checks, tokenChecks(token, feeds)...)
+	lookup := lookUpToken(resolved, feeds, deps)
+	resolved.Token = lookup.source.Token
+	token := readTokenStatus(deps.Env, resolved.TokenEnv, lookup.source)
+	checks = append(checks, tokenChecks(token, lookup, feeds)...)
 
 	notChecked := project.notes
 	for _, skipped := range project.skipped {
@@ -149,6 +134,8 @@ func Run(ctx context.Context, config Config, deps Dependencies) (Report, Resolve
 	case len(feeds) == 0:
 	case resolved.Offline:
 		notChecked = append(notChecked, NotChecked{Check: "live_token_check", Reason: "--offline was set, so the Token was not tested against the Feed."})
+	case resolved.Token == "" && lookup.failed():
+		notChecked = append(notChecked, NotChecked{Check: "live_token_check", Reason: "No Token could be chosen, so no request was made to PackageMaze."})
 	case resolved.Token == "":
 		notChecked = append(notChecked, NotChecked{Check: "live_token_check", Reason: fmt.Sprintf("%s is not set, so no request was made to PackageMaze.", resolved.TokenEnv)})
 	default:
@@ -160,7 +147,7 @@ func Run(ctx context.Context, config Config, deps Dependencies) (Report, Resolve
 			}
 			prober = NewHTTPProber(httpClient, resolved.AllowInsecureLocalhost)
 		}
-		probed, notes := probeFeeds(ctx, prober, feeds, resolved.Token, resolved.TokenEnv)
+		probed, notes := probeFeeds(ctx, prober, feeds, resolved.Token, lookup.use())
 		checks = append(checks, probed...)
 		notChecked = append(notChecked, notes...)
 	}
@@ -373,7 +360,7 @@ func ciFeedChecks(declarations []Declaration, committed map[string]bool) []Check
 // probeFeeds probes each configured Feed once and stops after the first sign
 // that PackageMaze cannot be reached or is throttling this client, so a run
 // never waits out several timeouts or feeds the throttle.
-func probeFeeds(ctx context.Context, prober Prober, feeds []FeedReport, token string, tokenEnv string) ([]Check, []NotChecked) {
+func probeFeeds(ctx context.Context, prober Prober, feeds []FeedReport, token string, using tokenUse) ([]Check, []NotChecked) {
 	var checks []Check
 	var notes []NotChecked
 	for position, feed := range feeds {
@@ -382,7 +369,7 @@ func probeFeeds(ctx context.Context, prober Prober, feeds []FeedReport, token st
 			continue
 		}
 		result, protocol := probeFeed(ctx, prober, feed, token)
-		checks = append(checks, probeCheck(result, feed.Feed, protocol, tokenEnv))
+		checks = append(checks, probeCheck(result, feed.Feed, protocol, using))
 		switch result.Outcome {
 		case ProbeTokenRejected:
 			notes = append(notes, NotChecked{Check: "token_rejection_reason", Reason: "PackageMaze does not tell package clients why a Token was rejected, so maze doctor cannot distinguish an expired, revoked, wrong-Feed, or read-less Token."})

@@ -130,7 +130,7 @@ func (p *HTTPProber) Probe(ctx context.Context, request ProbeRequest) ProbeResul
 // probeCheck turns one probe into the check a person or agent acts on. A
 // rejected Token is reported as exactly that: PackageMaze deliberately does not
 // tell package clients whether a Token is revoked, expired, or for another Feed.
-func probeCheck(result ProbeResult, feed Feed, protocol ArtifactProtocol, tokenEnv string) Check {
+func probeCheck(result ProbeResult, feed Feed, protocol ArtifactProtocol, using tokenUse) Check {
 	target := probeURL(feed, protocol)
 	switch result.Outcome {
 	case ProbeAccepted:
@@ -141,15 +141,15 @@ func probeCheck(result ProbeResult, feed Feed, protocol ArtifactProtocol, tokenE
 		return check(
 			"read_token_ready",
 			StatusPass,
-			fmt.Sprintf("PackageMaze accepts %s for reads from Feed %s%s (%s answered HTTP 200).", tokenEnv, feed.Slug(), as, target),
+			fmt.Sprintf("PackageMaze accepts %s for reads from Feed %s%s (%s answered HTTP 200).", using.label(), feed.Slug(), as, target),
 			"No action needed.",
 		).forFeed(feed)
 	case ProbeTokenRejected:
 		return check(
 			"read_token_rejected",
 			StatusFail,
-			fmt.Sprintf("PackageMaze rejected %s for Feed %s (HTTP %d from %s). PackageMaze does not say why: the Token may be revoked, expired, created for another Feed, or without Read access.", tokenEnv, feed.Slug(), result.StatusCode, target),
-			fmt.Sprintf("Create a new Token with Read access to Feed %s, or rotate the existing one, and set %s to its Secret. See %s", feed.Slug(), tokenEnv, DocsFixAFailingInstall),
+			fmt.Sprintf("PackageMaze rejected %s for Feed %s (HTTP %d from %s). PackageMaze does not say why: the Token may be revoked, expired, created for another Feed, or without Read access.", using.label(), feed.Slug(), result.StatusCode, target),
+			using.rejectedFix(feed),
 		).forFeed(feed)
 	case ProbeFeedNotFound:
 		return check(
