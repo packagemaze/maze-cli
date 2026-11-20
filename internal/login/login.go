@@ -62,7 +62,7 @@ func Run(ctx context.Context, config Config, deps Dependencies) (Result, error) 
 	if err := endpoint.ValidateURL("approval-url", started.ApprovalURL, config.AllowInsecureLocalhost); err != nil {
 		return Result{}, fmt.Errorf("PackageMaze sent an approval link maze will not open: %w", err)
 	}
-	announce(deps, config, started.ApprovalURL)
+	announce(deps, config, started)
 	collected, err := waitForApproval(ctx, client, started, deps)
 	if err != nil {
 		return Result{}, err
@@ -156,7 +156,8 @@ func tokenName(requested string, deps Dependencies) string {
 	return name
 }
 
-func announce(deps Dependencies, config Config, url string) {
+func announce(deps Dependencies, config Config, started Started) {
+	url := started.ApprovalURL
 	opened := false
 	if !config.NoBrowser && deps.OpenBrowser != nil {
 		opened = deps.OpenBrowser(url) == nil
@@ -168,6 +169,7 @@ func announce(deps Dependencies, config Config, url string) {
 		fmt.Fprintln(deps.Stderr, "Open this URL in a browser where you are signed in to PackageMaze, and approve the Token:")
 	}
 	fmt.Fprintln(deps.Stderr, url)
+	fmt.Fprintf(deps.Stderr, "When the page asks, type this code: %s\n", started.UserCode)
 	fmt.Fprintln(deps.Stderr, "Waiting for approval...")
 }
 
