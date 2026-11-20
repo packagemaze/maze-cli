@@ -1,7 +1,9 @@
-// Package npm configures npm-protocol package clients (npm, pnpm, Yarn
-// Berry, and Corepack) for a command, as PackageMaze's setup instructions
-// do: the first Feed is the default registry, and every Feed's URL carries
-// its own credential.
+// Package npm configures npm-protocol package clients (npm, pnpm, and
+// Corepack) for a command, as PackageMaze's setup instructions do: the first
+// Feed is the default registry, and every Feed's URL carries its own
+// credential. Yarn Berry is left to the project's .yarnrc.yml: its only
+// environment token is not scoped to a URL, so it would follow any registry a
+// project routes a scope to.
 package npm
 
 import (
@@ -11,8 +13,8 @@ import (
 )
 
 // Contribute writes a private npm user config, which npm and pnpm read
-// through NPM_CONFIG_USERCONFIG, and sets Yarn Berry's and Corepack's
-// variables, which take one registry: the first Feed.
+// through NPM_CONFIG_USERCONFIG, and sets Corepack's variables, which take one
+// registry: the first Feed.
 func Contribute(request clientconfig.Request) (clientconfig.Contribution, error) {
 	userConfig, err := request.Files.Write("npmrc", []byte(userConfig(request.Feeds)))
 	if err != nil {
@@ -21,14 +23,8 @@ func Contribute(request clientconfig.Request) (clientconfig.Contribution, error)
 	first := request.Feeds[0]
 	set := []clientconfig.Var{
 		{Name: "NPM_CONFIG_USERCONFIG", Value: userConfig},
-		{Name: "YARN_NPM_REGISTRY_SERVER", Value: registryURL(first)},
-		{Name: "YARN_NPM_AUTH_TOKEN", Value: request.Token},
-		{Name: "YARN_NPM_ALWAYS_AUTH", Value: "true"},
 		{Name: "COREPACK_NPM_REGISTRY", Value: first.BaseURL.String()},
 		{Name: "COREPACK_NPM_TOKEN", Value: request.Token},
-	}
-	if first.BaseURL.Scheme == "http" {
-		set = append(set, clientconfig.Var{Name: "YARN_UNSAFE_HTTP_WHITELIST", Value: first.BaseURL.Hostname()})
 	}
 	// An inherited registry variable outranks every npmrc file.
 	return clientconfig.Contribution{Set: set, Clear: []string{"NPM_CONFIG_REGISTRY"}}, nil

@@ -150,7 +150,7 @@ func TestAuthExecRunsTheCommandWithPrivatePackageClientConfiguration(t *testing.
 	}
 	child := readExecChildReport(t, report)
 	index := "https://__token__:" + execToken + "@pkg.packagemaze.com/acme/pypi/simple/"
-	if child.Env["MAZE_TOKEN"] != execToken || child.Env["YARN_NPM_AUTH_TOKEN"] != execToken ||
+	if child.Env["MAZE_TOKEN"] != execToken || child.Env["YARN_NPM_AUTH_TOKEN"] != "" ||
 		child.Env["COREPACK_NPM_REGISTRY"] != "https://pkg.packagemaze.com/acme/npm" ||
 		child.Env["PIP_INDEX_URL"] != index || child.Env["UV_DEFAULT_INDEX"] != index {
 		t.Fatalf("command environment = %#v", child.Env)

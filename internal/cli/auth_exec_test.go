@@ -145,12 +145,10 @@ func TestAuthExecRunsTheCommandWithNpmFeedConfiguration(t *testing.T) {
 		t.Fatalf("argv = %s %v", child.spec.Path, child.spec.Args)
 	}
 	for name, want := range map[string]string{
-		"MAZE_TOKEN":               execToken,
-		"YARN_NPM_REGISTRY_SERVER": "https://pkg.packagemaze.com/acme/npm/",
-		"YARN_NPM_AUTH_TOKEN":      execToken,
-		"COREPACK_NPM_REGISTRY":    "https://pkg.packagemaze.com/acme/npm",
-		"COREPACK_NPM_TOKEN":       execToken,
-		"PATH":                     "/bin",
+		"MAZE_TOKEN":            execToken,
+		"COREPACK_NPM_REGISTRY": "https://pkg.packagemaze.com/acme/npm",
+		"COREPACK_NPM_TOKEN":    execToken,
+		"PATH":                  "/bin",
 	} {
 		if child.env[name] != want {
 			t.Fatalf("%s = %q, want %q", name, child.env[name], want)

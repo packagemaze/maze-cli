@@ -61,7 +61,7 @@ func newAuthExecCommand(deps auth.Dependencies, execDeps execDependencies) *cobr
 		Use:   "exec [flags] -- <command> [args...]",
 		Short: "Run a command with package clients signed in to PackageMaze Feeds",
 		Long: "Exchange the job's identity token for a PackageMaze Token exactly as exchange-oidc does, then run the command with temporary package-client configuration for each Feed the Token was granted for, and remove it when the command ends.\n\n" +
-			"npm Feeds: a private npm user config (NPM_CONFIG_USERCONFIG, read by npm and pnpm) with the first Feed as the registry and a Feed-URL-scoped credential for each, plus Yarn Berry's and Corepack's registry and token variables for the first Feed. " +
+			"npm Feeds: a private npm user config (NPM_CONFIG_USERCONFIG, read by npm and pnpm) with the first Feed as the registry and a Feed-URL-scoped credential for each, plus Corepack's registry and token variables for the first Feed (Yarn Berry reads MAZE_TOKEN from the project's .yarnrc.yml). " +
 			"PyPI Feeds: PIP_INDEX_URL and UV_DEFAULT_INDEX for the first Feed, PIP_EXTRA_INDEX_URL and UV_INDEX for the others. The Token is in MAZE_TOKEN.\n\n" +
 			"The Token is never printed, passed as an argument, or written to a file. maze exits with the command's exit status.",
 		Example: "  maze auth exec --feed your-org/npm --purpose install -- npm ci\n" +

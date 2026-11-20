@@ -46,9 +46,6 @@ func TestContributeOneFeed(t *testing.T) {
 	}
 	wantSet := []clientconfig.Var{
 		{Name: "NPM_CONFIG_USERCONFIG", Value: "/private/npmrc"},
-		{Name: "YARN_NPM_REGISTRY_SERVER", Value: "https://pkg.packagemaze.com/acme/npm/"},
-		{Name: "YARN_NPM_AUTH_TOKEN", Value: "maze_ci_secret"},
-		{Name: "YARN_NPM_ALWAYS_AUTH", Value: "true"},
 		{Name: "COREPACK_NPM_REGISTRY", Value: "https://pkg.packagemaze.com/acme/npm"},
 		{Name: "COREPACK_NPM_TOKEN", Value: "maze_ci_secret"},
 	}
@@ -80,12 +77,12 @@ func TestContributeSeveralFeedsMakesTheFirstTheRegistryAndScopesEachCredential(t
 	if strings.Contains(files["npmrc"], "maze_ci_secret") {
 		t.Fatalf("the user config holds the Token")
 	}
-	if contribution.Set[1].Value != "https://pkg.packagemaze.com/acme/web/" || contribution.Set[4].Value != "https://pkg.packagemaze.com/acme/web" {
-		t.Fatalf("Yarn and Corepack must use the first Feed: %#v", contribution.Set)
+	if contribution.Set[1] != (clientconfig.Var{Name: "COREPACK_NPM_REGISTRY", Value: "https://pkg.packagemaze.com/acme/web"}) {
+		t.Fatalf("Corepack must use the first Feed: %#v", contribution.Set)
 	}
 }
 
-func TestContributeLocalHTTPFeedKeepsThePortAndAllowsYarn(t *testing.T) {
+func TestContributeLocalHTTPFeedKeepsThePortAndSetsNoYarnToken(t *testing.T) {
 	files := recordedFiles{}
 	contribution, err := Contribute(clientconfig.Request{
 		Feeds: feeds(t, "http://127.0.0.1:8788/acme/npm"),
@@ -98,8 +95,9 @@ func TestContributeLocalHTTPFeedKeepsThePortAndAllowsYarn(t *testing.T) {
 	if !strings.Contains(files["npmrc"], "//127.0.0.1:8788/acme/npm/:_authToken=${MAZE_TOKEN}\n") {
 		t.Fatalf("npmrc = %s", files["npmrc"])
 	}
-	last := contribution.Set[len(contribution.Set)-1]
-	if last != (clientconfig.Var{Name: "YARN_UNSAFE_HTTP_WHITELIST", Value: "127.0.0.1"}) {
-		t.Fatalf("last = %#v", last)
+	for _, variable := range contribution.Set {
+		if strings.HasPrefix(variable.Name, "YARN_") {
+			t.Fatalf("Yarn's environment token is not URL-scoped; got %s", variable.Name)
+		}
 	}
 }

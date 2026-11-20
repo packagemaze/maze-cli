@@ -220,12 +220,12 @@ replace-registry-host=npmjs
 ```
 
 The first npm Feed is the default registry; every npm Feed gets its own
-Feed-URL-scoped credential line. It also sets `YARN_NPM_REGISTRY_SERVER`,
-`YARN_NPM_AUTH_TOKEN`, and `YARN_NPM_ALWAYS_AUTH` for Yarn Berry and
-`COREPACK_NPM_REGISTRY` and `COREPACK_NPM_TOKEN` for Corepack, all for the
-first npm Feed only, because each reads one registry. Yarn's token is not
-scoped to a URL: a project that routes a scope to another registry must give
-that scope its own token. The command does not read your own npm user config,
+Feed-URL-scoped credential line. It also sets `COREPACK_NPM_REGISTRY` and
+`COREPACK_NPM_TOKEN` for Corepack, for the first npm Feed only, because
+Corepack reads one registry. It sets nothing for Yarn Berry, whose only
+environment token is not scoped to a URL: name the Feed under `npmRegistries`
+in the project's `.yarnrc.yml` with `npmAuthToken: "${MAZE_TOKEN}"`, which
+`maze auth exec` exports. The command does not read your own npm user config,
 and an inherited `NPM_CONFIG_REGISTRY` is removed because it would outrank
 every npmrc file.
 
