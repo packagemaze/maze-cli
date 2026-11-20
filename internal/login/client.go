@@ -3,17 +3,24 @@ package login
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
+	"github.com/packagemaze/maze-cli/internal/httpretry"
 	"github.com/packagemaze/maze-cli/internal/version"
 )
 
 const maxResponseBytes = 1024 * 1024
+
+// errUnanswered is a request PackageMaze may or may not have handled: the connection failed,
+// or a 2xx answer could not be read.
+var errUnanswered = errors.New("PackageMaze did not answer")
 
 // StartRequest is what maze asks PackageMaze for; a person narrows it in the browser.
 type StartRequest struct {
@@ -54,12 +61,14 @@ type Collected struct {
 	Organization Organization `json:"organization"`
 }
 
-// RefusedError is PackageMaze's final answer for a flow: denied, expired, already collected, or unknown.
+// RefusedError is any PackageMaze answer of HTTP 300 or above. Code, Message and Recovery come
+// from the body when it has them; RetryAfter is the Retry-After header, or 0 when absent.
 type RefusedError struct {
 	StatusCode int
 	Code       string
 	Message    string
 	Recovery   string
+	RetryAfter time.Duration
 }
 
 func (e *RefusedError) Error() string {
@@ -85,7 +94,7 @@ func (c Client) Start(ctx context.Context, request StartRequest) (Started, error
 	if err != nil {
 		return Started{}, err
 	}
-	if status != http.StatusCreated || started.FlowID == "" || started.CollectSecret == "" || started.ApprovalURL == "" {
+	if _, err := time.Parse(time.RFC3339, started.ExpiresAt); err != nil || status != http.StatusCreated || started.FlowID == "" || started.CollectSecret == "" || started.ApprovalURL == "" {
 		return Started{}, errors.New("PackageMaze did not start a Token request")
 	}
 	return started, nil
@@ -102,7 +111,7 @@ func (c Client) Collect(ctx context.Context, started Started) (*Collected, error
 		return nil, nil
 	}
 	if collected.TokenSecret == "" {
-		return nil, errors.New("PackageMaze answered without a Token")
+		return nil, fmt.Errorf("%w: the answer carried no Token", errUnanswered)
 	}
 	return &collected, nil
 }
@@ -139,23 +148,34 @@ func (c Client) post(ctx context.Context, child string, body any, out any) (int,
 	}
 	response, err := httpClient.Do(request)
 	if err != nil {
-		return 0, fmt.Errorf("PackageMaze request failed: %w", err)
+		return 0, requestFailed(ctx, err)
 	}
 	defer response.Body.Close()
-	content, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes))
-	if err != nil {
-		return 0, fmt.Errorf("read PackageMaze response: %w", err)
-	}
+	content, readErr := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes))
 	if response.StatusCode >= 300 {
-		return 0, refused(response.StatusCode, content)
+		return 0, refused(response, content)
+	}
+	if readErr != nil {
+		return 0, fmt.Errorf("%w: read HTTP %d answer: %w", errUnanswered, response.StatusCode, readErr)
 	}
 	if err := json.Unmarshal(content, out); err != nil {
-		return 0, fmt.Errorf("PackageMaze response was not valid JSON: %w", err)
+		return 0, fmt.Errorf("%w: HTTP %d answer was not valid JSON: %w", errUnanswered, response.StatusCode, err)
 	}
 	return response.StatusCode, nil
 }
 
-func refused(status int, content []byte) error {
+// requestFailed keeps a certificate failure final: it will not fix itself and may mean interception.
+func requestFailed(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if certificate := new(tls.CertificateVerificationError); errors.As(err, &certificate) {
+		return fmt.Errorf("PackageMaze request failed: %w", err)
+	}
+	return fmt.Errorf("%w: %w", errUnanswered, err)
+}
+
+func refused(response *http.Response, content []byte) error {
 	var payload struct {
 		Detail struct {
 			Code     string `json:"code"`
@@ -164,5 +184,6 @@ func refused(status int, content []byte) error {
 		} `json:"detail"`
 	}
 	_ = json.Unmarshal(content, &payload)
-	return &RefusedError{StatusCode: status, Code: payload.Detail.Code, Message: payload.Detail.Message, Recovery: payload.Detail.Recovery}
+	retryAfter, _ := httpretry.RetryAfter(response.Header.Get("Retry-After"), time.Now())
+	return &RefusedError{StatusCode: response.StatusCode, Code: payload.Detail.Code, Message: payload.Detail.Message, Recovery: payload.Detail.Recovery, RetryAfter: max(retryAfter, 0)}
 }

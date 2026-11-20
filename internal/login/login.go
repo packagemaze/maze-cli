@@ -38,6 +38,7 @@ type Dependencies struct {
 	HTTPClient  *http.Client
 	OpenBrowser func(url string) error
 	Sleep       func(ctx context.Context, d time.Duration) error
+	Now         func() time.Time
 	ConfigDir   func() (string, error)
 	Hostname    func() (string, error)
 	Stderr      io.Writer
@@ -173,19 +174,72 @@ func announce(deps Dependencies, config Config, started Started) {
 	fmt.Fprintln(deps.Stderr, "Waiting for approval...")
 }
 
+// waitForApproval collects until PackageMaze hands over the Token, refuses, or the request
+// expires. Collect is safe to repeat: a repeat collect of an already collected request revokes
+// that Token and returns a new one.
 func waitForApproval(ctx context.Context, client Client, started Started, deps Dependencies) (*Collected, error) {
 	interval := time.Duration(started.IntervalSeconds) * time.Second
 	if interval <= 0 {
 		interval = defaultInterval
 	}
+	expiresAt, err := time.Parse(time.RFC3339, started.ExpiresAt)
+	if err != nil {
+		return nil, fmt.Errorf("PackageMaze sent an invalid Token request expiry: %w", err)
+	}
 	for {
 		collected, err := client.Collect(ctx, started)
-		if err != nil || collected != nil {
-			return collected, err
+		if collected != nil {
+			return collected, nil
 		}
-		if err := deps.Sleep(ctx, interval); err != nil {
+		wait := interval
+		if err != nil {
+			retryAfter, retry := retryableCollect(err)
+			if !retry {
+				return nil, err
+			}
+			wait = max(interval, retryAfter)
+		}
+		if wait >= expiresAt.Sub(deps.Now()) {
+			return nil, expired(err)
+		}
+		if err != nil {
+			fmt.Fprintln(deps.Stderr, "PackageMaze asked maze to try again; retrying...")
+		}
+		if err := deps.Sleep(ctx, wait); err != nil {
 			return nil, err
 		}
+	}
+}
+
+func expired(last error) error {
+	const message = "the Token request expired before maze received a Token; run maze auth login again"
+	if last == nil {
+		return errors.New(message)
+	}
+	return fmt.Errorf("%s (last answer: %w)", message, last)
+}
+
+// retryableCollect is a collect worth repeating: no readable answer, token_flow_retry, throttling
+// or an unavailable server. Any other token_flow_* code is final.
+func retryableCollect(err error) (time.Duration, bool) {
+	if errors.Is(err, errUnanswered) {
+		return 0, true
+	}
+	var refused *RefusedError
+	if !errors.As(err, &refused) {
+		return 0, false
+	}
+	if refused.Code == "token_flow_retry" {
+		return refused.RetryAfter, true
+	}
+	if strings.HasPrefix(refused.Code, "token_flow_") {
+		return 0, false
+	}
+	switch refused.StatusCode {
+	case http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return refused.RetryAfter, true
+	default:
+		return 0, false
 	}
 }
 
@@ -208,5 +262,6 @@ func DefaultDependencies() Dependencies {
 		Hostname:    os.Hostname,
 		OpenBrowser: OpenBrowser,
 		Sleep:       SleepContext,
+		Now:         time.Now,
 	}
 }
