@@ -35,6 +35,10 @@ func newLoginCommand(deps auth.Dependencies, loginDeps login.Dependencies) *cobr
 			if err := endpoint.ValidateURL("api-url", config.APIURL, config.AllowInsecureLocalhost); err != nil {
 				return err
 			}
+			config.PackageClientURL = endpoint.ResolvePackageClientURL(config.PackageClientURL, env)
+			if err := endpoint.ValidateURL("package-client-url", config.PackageClientURL, config.AllowInsecureLocalhost); err != nil {
+				return err
+			}
 			runDeps := loginDeps
 			runDeps.Stderr = cmd.ErrOrStderr()
 			if runDeps.HTTPClient == nil {
@@ -57,6 +61,7 @@ func newLoginCommand(deps auth.Dependencies, loginDeps login.Dependencies) *cobr
 	flags.BoolVar(&config.NoBrowser, "no-browser", false, "Print the approval URL without opening a browser")
 	flags.StringVar(&baseURL, "base-url", "", "PackageMaze API Domain base URL (default: MAZE_BASE_URL, else https://api.packagemaze.com)")
 	flags.StringVar(&config.APIURL, "api-url", "", "Full PackageMaze API root URL override (default: {base-url}/v1)")
+	flags.StringVar(&config.PackageClientURL, "package-client-url", "", endpoint.PackageClientURLFlagHelp+"; saved with the profile so maze publish and maze doctor use it only there")
 	flags.BoolVar(&config.AllowInsecureLocalhost, "allow-insecure-localhost", false, "Allow http URLs only for localhost development")
 	_ = command.MarkFlagRequired("org")
 	return command

@@ -37,7 +37,6 @@ type Started struct {
 	ApprovalURL     string `json:"approval_url"`
 	ExpiresAt       string `json:"expires_at"`
 	IntervalSeconds int    `json:"interval_seconds"`
-	UserCode        string `json:"user_code"`
 }
 
 type Organization struct {
@@ -95,7 +94,7 @@ func (c Client) Start(ctx context.Context, request StartRequest) (Started, error
 	if err != nil {
 		return Started{}, err
 	}
-	if _, err := time.Parse(time.RFC3339, started.ExpiresAt); err != nil || status != http.StatusCreated || started.FlowID == "" || started.CollectSecret == "" || started.ApprovalURL == "" || started.UserCode == "" {
+	if _, err := time.Parse(time.RFC3339, started.ExpiresAt); err != nil || status != http.StatusCreated || started.FlowID == "" || started.CollectSecret == "" || started.ApprovalURL == "" {
 		return Started{}, errors.New("PackageMaze did not start a Token request")
 	}
 	return started, nil

@@ -30,7 +30,7 @@ func (f *fakeServer) handler(t *testing.T) http.Handler {
 			t.Fatal(err)
 		}
 		w.WriteHeader(http.StatusCreated)
-		_, _ = w.Write([]byte(`{"flow_id":"tfl_1","collect_secret":"collect_1","approval_url":"https://www.packagemaze.test/settings/tokens/approve/tfl_1","expires_at":"2026-11-20T10:10:00Z","interval_seconds":2,"user_code":"BCDF-GHJK"}`))
+		_, _ = w.Write([]byte(`{"flow_id":"tfl_1","collect_secret":"collect_1","approval_url":"https://www.packagemaze.test/settings/tokens/approve/tfl_1","expires_at":"2026-11-20T10:10:00Z","interval_seconds":2}`))
 	})
 	mux.HandleFunc("POST /v1/auth/token-flows/tfl_1/collect", func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]string
@@ -115,7 +115,7 @@ func runWith(t *testing.T, ctx context.Context, fake *fakeServer, config Config,
 
 func TestLoginSavesTheApprovedTokenToAProfileAndVerifiesIt(t *testing.T) {
 	fake := &fakeServer{collectAnswers: []func(http.ResponseWriter){pending, pending, collected}}
-	result, configDir, stderr, err := run(t, fake, Config{Organization: "acme", Feeds: []string{"acme/npm"}})
+	result, configDir, stderr, err := run(t, fake, Config{Organization: "acme", Feeds: []string{"acme/npm"}, PackageClientURL: "https://pkg.packagemaze.com"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,8 +125,8 @@ func TestLoginSavesTheApprovedTokenToAProfileAndVerifiesIt(t *testing.T) {
 	if feeds, ok := fake.started.Feeds.([]any); !ok || len(feeds) != 1 || feeds[0] != "npm" {
 		t.Fatalf("feeds: %#v", fake.started.Feeds)
 	}
-	if !strings.Contains(stderr, "BCDF-GHJK") {
-		t.Fatalf("the user code was not printed: %q", stderr)
+	if strings.Contains(stderr, "code") {
+		t.Fatalf("maze printed a code the approval page no longer asks for: %q", stderr)
 	}
 	if fake.collects.Load() != 3 || fake.verified != "feed_npm" {
 		t.Fatalf("collects=%d verified=%q", fake.collects.Load(), fake.verified)
@@ -149,6 +149,9 @@ func TestLoginSavesTheApprovedTokenToAProfileAndVerifiesIt(t *testing.T) {
 	var file credentialsFile
 	if err := json.Unmarshal(content, &file); err != nil || file.Profiles["acme"].Token != secret {
 		t.Fatalf("profile not saved: %s", content)
+	}
+	if saved := file.Profiles["acme"]; saved.PackageClientURL != "https://pkg.packagemaze.com" || saved.Organization != "acme" {
+		t.Fatalf("profile = %+v", saved)
 	}
 }
 
