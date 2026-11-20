@@ -18,10 +18,12 @@ import (
 )
 
 const (
-	// About thirty seconds of failed polls in a row, well inside a request's ten minutes.
-	maxTransientCollectFailures = 15
-	defaultInterval             = 2 * time.Second
-	maxTokenName                = 80
+	// Retries of a collect PackageMaze asked maze to repeat, in a row, before maze gives up.
+	maxCollectRetries = 15
+	// The longest Retry-After maze waits; a request lives ten minutes.
+	maxCollectRetryAfter = 30 * time.Second
+	defaultInterval      = 2 * time.Second
+	maxTokenName         = 80
 )
 
 type Config struct {
@@ -180,40 +182,62 @@ func waitForApproval(ctx context.Context, client Client, started Started, deps D
 	if interval <= 0 {
 		interval = defaultInterval
 	}
-	failures := 0
+	retries := 0
 	for {
 		collected, err := client.Collect(ctx, started)
 		if collected != nil {
 			return collected, nil
 		}
+		wait := interval
 		if err != nil {
-			failures++
-			if !transient(err) || failures > maxTransientCollectFailures {
-				return nil, err
+			retryAfter, retry := retryableCollect(err)
+			if !retry || retries == maxCollectRetries {
+				return nil, collectFailed(deps, err)
 			}
+			retries++
+			wait = max(interval, min(retryAfter, maxCollectRetryAfter))
+			fmt.Fprintln(deps.Stderr, "PackageMaze asked maze to try again; retrying...")
 		} else {
-			failures = 0
+			retries = 0
 		}
-		if err := deps.Sleep(ctx, interval); err != nil {
+		if err := deps.Sleep(ctx, wait); err != nil {
 			return nil, err
 		}
 	}
 }
 
-// transient is a collect failure worth polling through: PackageMaze asked for a
-// retry (503 token_flow_retry, with the request still approved), throttled, or
-// the request never got an answer. A denial or an expiry is final.
-func transient(err error) bool {
+// retryableCollect is an explicit answer to collect again: token_flow_retry (PackageMaze revoked
+// the Token it could not hand over and reopened the request), throttling, or a gateway failure.
+// A lost answer is never retried: the Token may exist, and a second collect would orphan it.
+func retryableCollect(err error) (time.Duration, bool) {
 	var refused *RefusedError
 	if !errors.As(err, &refused) {
-		return errors.Is(err, errRequestFailed)
+		return 0, false
+	}
+	if refused.Code == "token_flow_retry" {
+		return refused.RetryAfter, true
+	}
+	if strings.HasPrefix(refused.Code, "token_flow_") {
+		return 0, false
 	}
 	switch refused.StatusCode {
-	case http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
-		return true
+	case http.StatusTooManyRequests, http.StatusBadGateway, http.StatusGatewayTimeout:
+		return refused.RetryAfter, true
 	default:
-		return false
+		return 0, false
 	}
+}
+
+// collectFailed tells the person to look for a Token that may exist when maze cannot tell.
+func collectFailed(deps Dependencies, err error) error {
+	var lost *AnswerLostError
+	var refused *RefusedError
+	if !errors.As(err, &lost) && !(errors.As(err, &refused) && refused.Code == "token_flow_collected") {
+		return err
+	}
+	const advice = "PackageMaze may have created the Token without maze receiving it. Check the Tokens page in PackageMaze, revoke the Token if it is unused, then run maze auth login again."
+	fmt.Fprintln(deps.Stderr, advice)
+	return fmt.Errorf("%w. %s", err, advice)
 }
 
 // SleepContext waits for d, or returns early when ctx ends.

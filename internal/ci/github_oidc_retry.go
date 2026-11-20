@@ -3,14 +3,12 @@ package ci
 import (
 	"context"
 	"errors"
-	"io"
-	"net"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
-	"syscall"
 	"time"
+
+	"github.com/packagemaze/maze-cli/internal/httpretry"
 )
 
 const (
@@ -50,12 +48,7 @@ func gitHubOIDCRetryWait(response *http.Response, err error) (time.Duration, boo
 		if errors.Is(err, context.Canceled) {
 			return 0, false
 		}
-		var networkError net.Error
-		retry := (errors.As(err, &networkError) && networkError.Timeout()) ||
-			errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
-			errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNABORTED) || errors.Is(err, syscall.EPIPE) ||
-			gitHubOIDCPlatformConnectionError(err)
-		return gitHubOIDCRetryDelay, retry
+		return gitHubOIDCRetryDelay, httpretry.ConnectionDropped(err)
 	}
 	switch response.StatusCode {
 	case http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
@@ -70,15 +63,8 @@ func gitHubOIDCWaitForRetryAfter(value string) (time.Duration, bool) {
 	if value == "" {
 		return gitHubOIDCRetryDelay, true
 	}
-	var wait time.Duration
-	if seconds, err := strconv.ParseUint(value, 10, 64); err == nil {
-		if seconds > uint64(gitHubOIDCMaxRetryWait/time.Second) {
-			return 0, false
-		}
-		wait = time.Duration(seconds) * time.Second
-	} else if date, err := http.ParseTime(value); err == nil {
-		wait = time.Until(date)
-	} else {
+	wait, ok := httpretry.RetryAfter(value, time.Now())
+	if !ok {
 		return 0, false
 	}
 	if wait > gitHubOIDCMaxRetryWait {
