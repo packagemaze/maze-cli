@@ -3,6 +3,7 @@ package login
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,21 +18,9 @@ import (
 
 const maxResponseBytes = 1024 * 1024
 
-// AnswerLostError is a request that may have reached PackageMaze whose answer maze could not
-// read: the connection dropped (StatusCode 0) or a 2xx body was unreadable or not valid JSON.
-type AnswerLostError struct {
-	StatusCode int
-	Err        error
-}
-
-func (e *AnswerLostError) Error() string {
-	if e.StatusCode == 0 {
-		return fmt.Sprintf("PackageMaze's answer was lost: %v", e.Err)
-	}
-	return fmt.Sprintf("PackageMaze's HTTP %d answer could not be read: %v", e.StatusCode, e.Err)
-}
-
-func (e *AnswerLostError) Unwrap() error { return e.Err }
+// errUnanswered is a request PackageMaze may or may not have handled: the connection failed,
+// or a 2xx answer could not be read.
+var errUnanswered = errors.New("PackageMaze did not answer")
 
 // StartRequest is what maze asks PackageMaze for; a person narrows it in the browser.
 type StartRequest struct {
@@ -106,7 +95,7 @@ func (c Client) Start(ctx context.Context, request StartRequest) (Started, error
 	if err != nil {
 		return Started{}, err
 	}
-	if status != http.StatusCreated || started.FlowID == "" || started.CollectSecret == "" || started.ApprovalURL == "" || started.UserCode == "" {
+	if _, err := time.Parse(time.RFC3339, started.ExpiresAt); err != nil || status != http.StatusCreated || started.FlowID == "" || started.CollectSecret == "" || started.ApprovalURL == "" || started.UserCode == "" {
 		return Started{}, errors.New("PackageMaze did not start a Token request")
 	}
 	return started, nil
@@ -116,10 +105,6 @@ func (c Client) Start(ctx context.Context, request StartRequest) (Started, error
 func (c Client) Collect(ctx context.Context, started Started) (*Collected, error) {
 	var collected Collected
 	status, err := c.post(ctx, "/auth/token-flows/"+started.FlowID+"/collect", map[string]string{"collect_secret": started.CollectSecret}, &collected)
-	var lost *AnswerLostError
-	if errors.As(err, &lost) && lost.StatusCode == http.StatusAccepted {
-		return nil, nil
-	}
 	if err != nil {
 		return nil, err
 	}
@@ -127,7 +112,7 @@ func (c Client) Collect(ctx context.Context, started Started) (*Collected, error
 		return nil, nil
 	}
 	if collected.TokenSecret == "" {
-		return nil, &AnswerLostError{StatusCode: status, Err: errors.New("the answer carried no Token")}
+		return nil, fmt.Errorf("%w: the answer carried no Token", errUnanswered)
 	}
 	return &collected, nil
 }
@@ -172,22 +157,23 @@ func (c Client) post(ctx context.Context, child string, body any, out any) (int,
 		return 0, refused(response, content)
 	}
 	if readErr != nil {
-		return 0, &AnswerLostError{StatusCode: response.StatusCode, Err: readErr}
+		return 0, fmt.Errorf("%w: read HTTP %d answer: %w", errUnanswered, response.StatusCode, readErr)
 	}
 	if err := json.Unmarshal(content, out); err != nil {
-		return 0, &AnswerLostError{StatusCode: response.StatusCode, Err: fmt.Errorf("not valid JSON: %w", err)}
+		return 0, fmt.Errorf("%w: HTTP %d answer was not valid JSON: %w", errUnanswered, response.StatusCode, err)
 	}
 	return response.StatusCode, nil
 }
 
+// requestFailed keeps a certificate failure final: it will not fix itself and may mean interception.
 func requestFailed(ctx context.Context, err error) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	if httpretry.ConnectionDropped(err) {
-		return &AnswerLostError{Err: err}
+	if certificate := new(tls.CertificateVerificationError); errors.As(err, &certificate) {
+		return fmt.Errorf("PackageMaze request failed: %w", err)
 	}
-	return fmt.Errorf("PackageMaze request failed: %w", err)
+	return fmt.Errorf("%w: %w", errUnanswered, err)
 }
 
 func refused(response *http.Response, content []byte) error {

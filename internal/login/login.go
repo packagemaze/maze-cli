@@ -18,12 +18,8 @@ import (
 )
 
 const (
-	// Retries of a collect PackageMaze asked maze to repeat, in a row, before maze gives up.
-	maxCollectRetries = 15
-	// The longest Retry-After maze waits; a request lives ten minutes.
-	maxCollectRetryAfter = 30 * time.Second
-	defaultInterval      = 2 * time.Second
-	maxTokenName         = 80
+	defaultInterval = 2 * time.Second
+	maxTokenName    = 80
 )
 
 type Config struct {
@@ -41,6 +37,7 @@ type Dependencies struct {
 	HTTPClient  *http.Client
 	OpenBrowser func(url string) error
 	Sleep       func(ctx context.Context, d time.Duration) error
+	Now         func() time.Time
 	ConfigDir   func() (string, error)
 	Hostname    func() (string, error)
 	Stderr      io.Writer
@@ -177,12 +174,18 @@ func announce(deps Dependencies, config Config, started Started) {
 	fmt.Fprintln(deps.Stderr, "Waiting for approval...")
 }
 
+// waitForApproval collects until PackageMaze hands over the Token, refuses, or the request
+// expires. Collect is safe to repeat: a repeat collect of an already collected request revokes
+// that Token and returns a new one.
 func waitForApproval(ctx context.Context, client Client, started Started, deps Dependencies) (*Collected, error) {
 	interval := time.Duration(started.IntervalSeconds) * time.Second
 	if interval <= 0 {
 		interval = defaultInterval
 	}
-	retries := 0
+	expiresAt, err := time.Parse(time.RFC3339, started.ExpiresAt)
+	if err != nil {
+		return nil, fmt.Errorf("PackageMaze sent an invalid Token request expiry: %w", err)
+	}
 	for {
 		collected, err := client.Collect(ctx, started)
 		if collected != nil {
@@ -191,14 +194,16 @@ func waitForApproval(ctx context.Context, client Client, started Started, deps D
 		wait := interval
 		if err != nil {
 			retryAfter, retry := retryableCollect(err)
-			if !retry || retries == maxCollectRetries {
-				return nil, collectFailed(deps, err)
+			if !retry {
+				return nil, err
 			}
-			retries++
-			wait = max(interval, min(retryAfter, maxCollectRetryAfter))
+			wait = max(interval, retryAfter)
+		}
+		if wait >= expiresAt.Sub(deps.Now()) {
+			return nil, expired(err)
+		}
+		if err != nil {
 			fmt.Fprintln(deps.Stderr, "PackageMaze asked maze to try again; retrying...")
-		} else {
-			retries = 0
 		}
 		if err := deps.Sleep(ctx, wait); err != nil {
 			return nil, err
@@ -206,10 +211,20 @@ func waitForApproval(ctx context.Context, client Client, started Started, deps D
 	}
 }
 
-// retryableCollect is an explicit answer to collect again: token_flow_retry (PackageMaze revoked
-// the Token it could not hand over and reopened the request), throttling, or a gateway failure.
-// A lost answer is never retried: the Token may exist, and a second collect would orphan it.
+func expired(last error) error {
+	const message = "the Token request expired before maze received a Token; run maze auth login again"
+	if last == nil {
+		return errors.New(message)
+	}
+	return fmt.Errorf("%s (last answer: %w)", message, last)
+}
+
+// retryableCollect is a collect worth repeating: no readable answer, token_flow_retry, throttling
+// or an unavailable server. Any other token_flow_* code is final.
 func retryableCollect(err error) (time.Duration, bool) {
+	if errors.Is(err, errUnanswered) {
+		return 0, true
+	}
 	var refused *RefusedError
 	if !errors.As(err, &refused) {
 		return 0, false
@@ -221,23 +236,11 @@ func retryableCollect(err error) (time.Duration, bool) {
 		return 0, false
 	}
 	switch refused.StatusCode {
-	case http.StatusTooManyRequests, http.StatusBadGateway, http.StatusGatewayTimeout:
+	case http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
 		return refused.RetryAfter, true
 	default:
 		return 0, false
 	}
-}
-
-// collectFailed tells the person to look for a Token that may exist when maze cannot tell.
-func collectFailed(deps Dependencies, err error) error {
-	var lost *AnswerLostError
-	var refused *RefusedError
-	if !errors.As(err, &lost) && !(errors.As(err, &refused) && refused.Code == "token_flow_collected") {
-		return err
-	}
-	const advice = "PackageMaze may have created the Token without maze receiving it. Check the Tokens page in PackageMaze, revoke the Token if it is unused, then run maze auth login again."
-	fmt.Fprintln(deps.Stderr, advice)
-	return fmt.Errorf("%w. %s", err, advice)
 }
 
 // SleepContext waits for d, or returns early when ctx ends.
@@ -259,5 +262,6 @@ func DefaultDependencies() Dependencies {
 		Hostname:    os.Hostname,
 		OpenBrowser: OpenBrowser,
 		Sleep:       SleepContext,
+		Now:         time.Now,
 	}
 }

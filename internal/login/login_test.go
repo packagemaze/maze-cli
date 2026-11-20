@@ -82,8 +82,10 @@ func run(t *testing.T, fake *fakeServer, config Config) (Result, string, string,
 	return runWith(t, context.Background(), fake, config, func(context.Context, time.Duration) error { return nil })
 }
 
+// runWith starts the clock ten minutes before the request expires; each sleep advances it.
 func runWith(t *testing.T, ctx context.Context, fake *fakeServer, config Config, sleep func(context.Context, time.Duration) error) (Result, string, string, error) {
 	t.Helper()
+	now := time.Date(2026, 11, 20, 10, 0, 0, 0, time.UTC)
 	server := httptest.NewServer(fake.handler(t))
 	t.Cleanup(server.Close)
 	configDir := t.TempDir()
@@ -95,8 +97,12 @@ func runWith(t *testing.T, ctx context.Context, fake *fakeServer, config Config,
 		HTTPClient:  server.Client(),
 		Hostname:    func() (string, error) { return "laptop", nil },
 		OpenBrowser: func(url string) error { opened = url; return nil },
-		Sleep:       sleep,
-		Stderr:      &stderr,
+		Sleep: func(ctx context.Context, d time.Duration) error {
+			now = now.Add(d)
+			return sleep(ctx, d)
+		},
+		Now:    func() time.Time { return now },
+		Stderr: &stderr,
 	})
 	if strings.Contains(stderr.String(), secret) {
 		t.Fatal("the Token Secret reached stderr")
@@ -214,24 +220,16 @@ func truncatedCollected(w http.ResponseWriter) {
 	_, _ = w.Write([]byte(`{"status":"collected","token_secret":"` + secret))
 }
 
-func repeat(answer func(http.ResponseWriter), n int) []func(http.ResponseWriter) {
-	answers := make([]func(http.ResponseWriter), n)
-	for i := range answers {
-		answers[i] = answer
-	}
-	return answers
-}
-
 func TestLoginPollsThroughARetryableCollect(t *testing.T) {
-	fake := &fakeServer{collectAnswers: []func(http.ResponseWriter){pending, refusal(http.StatusServiceUnavailable, "token_flow_retry"), refusal(http.StatusTooManyRequests, "rate_limited"), refusal(http.StatusBadGateway, ""), refusal(http.StatusGatewayTimeout, ""), collected}}
+	fake := &fakeServer{collectAnswers: []func(http.ResponseWriter){pending, refusal(http.StatusServiceUnavailable, "token_flow_retry"), refusal(http.StatusTooManyRequests, "rate_limited"), refusal(http.StatusBadGateway, ""), refusal(http.StatusServiceUnavailable, ""), refusal(http.StatusGatewayTimeout, ""), collected}}
 	result, _, stderr, err := run(t, fake, Config{Organization: "acme"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fake.collects.Load() != 6 || result.Profile != "acme" {
+	if fake.collects.Load() != 7 || result.Profile != "acme" {
 		t.Fatalf("collects=%d result=%+v", fake.collects.Load(), result)
 	}
-	if strings.Count(stderr, "PackageMaze asked maze to try again; retrying...") != 4 {
+	if strings.Count(stderr, "PackageMaze asked maze to try again; retrying...") != 5 {
 		t.Fatalf("stderr: %q", stderr)
 	}
 }
@@ -243,9 +241,9 @@ func TestLoginDecidesRetriesOnTheCodeBeforeTheStatus(t *testing.T) {
 		retry  bool
 	}{
 		{http.StatusConflict, "token_flow_retry", true},
-		{http.StatusServiceUnavailable, "", false},
-		{http.StatusServiceUnavailable, "maintenance", false},
+		{http.StatusServiceUnavailable, "maintenance", true},
 		{http.StatusTooManyRequests, "token_flow_denied", false},
+		{http.StatusServiceUnavailable, "token_flow_expired", false},
 		{http.StatusInternalServerError, "", false},
 	} {
 		fake := &fakeServer{collectAnswers: []func(http.ResponseWriter){refusal(answer.status, answer.code), collected}}
@@ -256,61 +254,46 @@ func TestLoginDecidesRetriesOnTheCodeBeforeTheStatus(t *testing.T) {
 	}
 }
 
-func TestLoginStopsWhenTheCollectAnswerIsLost(t *testing.T) {
+func TestLoginRetriesACollectWhoseAnswerWasLost(t *testing.T) {
 	for name, answer := range map[string]func(http.ResponseWriter){
 		"dropped connection": dropConnection,
 		"unreadable 200":     truncatedCollected,
 		"200 without JSON":   func(w http.ResponseWriter) { _, _ = w.Write([]byte("<html>")) },
+		"200 without Token":  func(w http.ResponseWriter) { _, _ = w.Write([]byte(`{"status":"collected"}`)) },
 	} {
 		fake := &fakeServer{collectAnswers: []func(http.ResponseWriter){pending, answer, collected}}
-		_, configDir, stderr, err := run(t, fake, Config{Organization: "acme"})
-		var lost *AnswerLostError
-		if !errors.As(err, &lost) || fake.collects.Load() != 2 {
+		result, _, stderr, err := run(t, fake, Config{Organization: "acme"})
+		if err != nil || fake.collects.Load() != 3 || result.Profile != "acme" {
 			t.Fatalf("%s: collects=%d err=%v", name, fake.collects.Load(), err)
 		}
-		for _, text := range []string{stderr, err.Error()} {
-			if !strings.Contains(text, "Check the Tokens page in PackageMaze") || !strings.Contains(text, "run maze auth login again") {
-				t.Fatalf("%s: no advice in %q", name, text)
-			}
-		}
-		if strings.Contains(err.Error(), secret) {
-			t.Fatalf("%s: the Token Secret reached the error", name)
-		}
-		if _, statErr := os.Stat(CredentialsPath(configDir)); !errors.Is(statErr, os.ErrNotExist) {
-			t.Fatalf("%s: a lost answer wrote a profile", name)
+		if !strings.Contains(stderr, "retrying") {
+			t.Fatalf("%s: stderr %q", name, stderr)
 		}
 	}
 }
 
-func TestLoginPointsAtTheTokensPageWhenTheRequestWasAlreadyCollected(t *testing.T) {
-	fake := &fakeServer{collectAnswers: []func(http.ResponseWriter){refusal(http.StatusGatewayTimeout, ""), refusal(http.StatusGone, "token_flow_collected")}}
-	_, _, stderr, err := run(t, fake, Config{Organization: "acme"})
-	var refused *RefusedError
-	if !errors.As(err, &refused) || refused.Code != "token_flow_collected" || !strings.Contains(stderr, "Check the Tokens page in PackageMaze") {
-		t.Fatalf("err=%v stderr=%q", err, stderr)
-	}
-}
-
-func TestLoginStopsOnANetworkErrorThatNeverReachedPackageMaze(t *testing.T) {
+func TestLoginStopsOnACertificateFailure(t *testing.T) {
 	fake := &fakeServer{collectAnswers: []func(http.ResponseWriter){collected}}
-	server := httptest.NewServer(fake.handler(t))
-	url := server.URL
-	server.Close()
-	client := Client{APIURL: url + "/v1", HTTPClient: &http.Client{}}
+	server := httptest.NewTLSServer(fake.handler(t))
+	t.Cleanup(server.Close)
+	client := Client{APIURL: server.URL + "/v1", HTTPClient: &http.Client{}}
 	var stderr bytes.Buffer
-	_, err := waitForApproval(context.Background(), client, Started{FlowID: "tfl_1", CollectSecret: "collect_1"}, Dependencies{Stderr: &stderr, Sleep: func(context.Context, time.Duration) error { t.Fatal("retried"); return nil }})
-	var lost *AnswerLostError
-	if err == nil || errors.As(err, &lost) || stderr.Len() != 0 {
+	_, err := waitForApproval(context.Background(), client, Started{FlowID: "tfl_1", CollectSecret: "collect_1", ExpiresAt: "2999-01-01T00:00:00Z"}, Dependencies{
+		Stderr: &stderr,
+		Now:    time.Now,
+		Sleep:  func(context.Context, time.Duration) error { t.Fatal("retried"); return nil },
+	})
+	if err == nil || errors.Is(err, errUnanswered) || stderr.Len() != 0 || fake.collects.Load() != 0 {
 		t.Fatalf("err=%v stderr=%q", err, stderr.String())
 	}
 }
 
-func TestLoginWaitsAsLongAsRetryAfterAsksWithinACap(t *testing.T) {
+func TestLoginWaitsAsLongAsRetryAfterAsks(t *testing.T) {
 	fake := &fakeServer{collectAnswers: []func(http.ResponseWriter){
 		pending,
 		refusalAfter(http.StatusServiceUnavailable, "token_flow_retry", "7"),
-		refusalAfter(http.StatusTooManyRequests, "rate_limited", "3600"),
-		refusalAfter(http.StatusTooManyRequests, "rate_limited", time.Now().Add(20*time.Second).UTC().Format(http.TimeFormat)),
+		refusalAfter(http.StatusTooManyRequests, "rate_limited", "120"),
+		refusalAfter(http.StatusServiceUnavailable, "", time.Now().Add(20*time.Second).UTC().Format(http.TimeFormat)),
 		refusalAfter(http.StatusServiceUnavailable, "token_flow_retry", "1"),
 		refusal(http.StatusBadGateway, ""),
 		collected,
@@ -323,9 +306,28 @@ func TestLoginWaitsAsLongAsRetryAfterAsksWithinACap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(waits) != 6 || waits[0] != 2*time.Second || waits[1] != 7*time.Second || waits[2] != maxCollectRetryAfter ||
+	if len(waits) != 6 || waits[0] != 2*time.Second || waits[1] != 7*time.Second || waits[2] != 120*time.Second ||
 		waits[3] < 18*time.Second || waits[3] > 20*time.Second || waits[4] != 2*time.Second || waits[5] != 2*time.Second {
 		t.Fatalf("waits = %v", waits)
+	}
+}
+
+func TestLoginStopsAtTheRequestExpiry(t *testing.T) {
+	for name, answer := range map[string]func(http.ResponseWriter){
+		"retrying":                refusal(http.StatusServiceUnavailable, "token_flow_retry"),
+		"retry-after past expiry": refusalAfter(http.StatusServiceUnavailable, "token_flow_retry", "3600"),
+		"pending":                 pending,
+		"unanswered":              dropConnection,
+	} {
+		fake := &fakeServer{collectAnswers: []func(http.ResponseWriter){answer}}
+		var waited time.Duration
+		_, _, _, err := runWith(t, context.Background(), fake, Config{Organization: "acme"}, func(_ context.Context, d time.Duration) error {
+			waited += d
+			return nil
+		})
+		if err == nil || !strings.Contains(err.Error(), "the Token request expired") || waited >= 10*time.Minute {
+			t.Fatalf("%s: waited=%v err=%v", name, waited, err)
+		}
 	}
 }
 
@@ -333,39 +335,11 @@ func TestLoginStopsWhenCancelledWhileWaiting(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	fake := &fakeServer{collectAnswers: []func(http.ResponseWriter){pending, collected}}
-	_, _, _, err := runWith(t, ctx, fake, Config{Organization: "acme"}, func(ctx context.Context, d time.Duration) error {
+	_, _, stderr, err := runWith(t, ctx, fake, Config{Organization: "acme"}, func(ctx context.Context, d time.Duration) error {
 		cancel()
 		return SleepContext(ctx, time.Hour)
 	})
-	if !errors.Is(err, context.Canceled) || fake.collects.Load() != 1 {
-		t.Fatalf("collects=%d err=%v", fake.collects.Load(), err)
-	}
-}
-
-func TestLoginResetsTheRetryCountAfterAPendingAnswer(t *testing.T) {
-	retry := refusal(http.StatusServiceUnavailable, "token_flow_retry")
-	answers := append(repeat(retry, maxCollectRetries), pending)
-	answers = append(answers, repeat(retry, maxCollectRetries)...)
-	fake := &fakeServer{collectAnswers: append(answers, collected)}
-	if _, _, _, err := run(t, fake, Config{Organization: "acme"}); err != nil {
-		t.Fatal(err)
-	}
-	if got := fake.collects.Load(); got != int32(2*maxCollectRetries+2) {
-		t.Fatalf("collects = %d", got)
-	}
-}
-
-func TestLoginGivesUpAfterMaxCollectRetries(t *testing.T) {
-	fake := &fakeServer{collectAnswers: []func(http.ResponseWriter){refusal(http.StatusServiceUnavailable, "token_flow_retry")}}
-	_, _, stderr, err := run(t, fake, Config{Organization: "acme"})
-	var refused *RefusedError
-	if !errors.As(err, &refused) || refused.Code != "token_flow_retry" {
-		t.Fatalf("err = %v", err)
-	}
-	if got := fake.collects.Load(); got != maxCollectRetries+1 {
-		t.Fatalf("collects = %d", got)
-	}
-	if got := strings.Count(stderr, "retrying"); got != maxCollectRetries {
-		t.Fatalf("retries printed = %d", got)
+	if !errors.Is(err, context.Canceled) || fake.collects.Load() != 1 || strings.Contains(stderr, "retrying") {
+		t.Fatalf("collects=%d err=%v stderr=%q", fake.collects.Load(), err, stderr)
 	}
 }
