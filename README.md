@@ -391,6 +391,13 @@ accepted. Independent missing parts transfer under a fixed concurrency bound;
 independent Artifacts also transfer under a separate fixed bound. Credential
 renewal remains future work.
 
+On a Feed with publish approval on, a publish holds its new versions until an
+Organization Admin approves the Run that published them. `maze publish` still
+succeeds and prints, on stderr, `<name>@<version> is waiting for an
+Organization Admin's approval: <link>` for each held version. If an
+Organization Admin rejected the Run, `maze publish` fails with a message saying
+so. JSON output carries `publish_approval` on the session and on each Artifact.
+
 Every request from `maze` to PackageMaze carries
 `X-PackageMaze-Client-Version: maze/<version>`. PackageMaze can use that explicit
 version for diagnostics and support policy without inferring it from output or
