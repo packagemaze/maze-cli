@@ -201,8 +201,9 @@ type WaitInstruction struct {
 type PublishSessionStatusResponse struct {
 	Artifacts      []ArtifactStatus `json:"artifacts"`
 	PublishSession struct {
-		ID    string `json:"id"`
-		State string `json:"state"`
+		ID              string           `json:"id"`
+		PublishApproval *PublishApproval `json:"publish_approval"`
+		State           string           `json:"state"`
 	} `json:"publish_session"`
 	SchemaVersion int             `json:"schema_version"`
 	Wait          WaitInstruction `json:"wait"`
@@ -215,7 +216,8 @@ type ArtifactStatus struct {
 		Name    string `json:"name"`
 		Version string `json:"version"`
 	} `json:"package"`
-	PublishJob *struct {
+	PublishApproval *PublishApproval `json:"publish_approval"`
+	PublishJob      *struct {
 		ID    string `json:"id"`
 		State string `json:"state"`
 	} `json:"publish_job"`
@@ -224,6 +226,30 @@ type ArtifactStatus struct {
 		ID    string `json:"id"`
 		State string `json:"state"`
 	} `json:"upload_session"`
+}
+
+// PublishApproval is present while a Feed's publish approval holds what a
+// Publish Session published. A held Artifact still reports state "ready".
+type PublishApproval struct {
+	ApprovalURL string `json:"approval_url,omitempty"`
+	// Number is passed through as PackageMaze sent it.
+	Number json.RawMessage `json:"number,omitempty"`
+	RunURL string          `json:"run_url,omitempty"`
+	State  string          `json:"state"`
+}
+
+const (
+	PublishApprovalAwaiting = "awaiting_approval"
+	PublishApprovalRejected = "rejected"
+)
+
+// rejectedRunFailsPublish sets whether maze publish exits non-zero when an
+// Organization Admin rejected the Run, so its versions will never be served.
+// Pending a founder decision (packagemaze/packagemaze#5905).
+const rejectedRunFailsPublish = true
+
+func (approval PublishApproval) link() string {
+	return firstNonEmpty(approval.RunURL, approval.ApprovalURL)
 }
 
 type Diagnostic struct {
@@ -235,17 +261,19 @@ type Diagnostic struct {
 type Result struct {
 	Artifacts        []ArtifactResult `json:"artifacts"`
 	ArtifactProtocol string           `json:"artifact_protocol,omitempty"`
+	PublishApproval  *PublishApproval `json:"publish_approval,omitempty"`
 	PublishSessionID string           `json:"publish_session_id"`
 	Resumed          bool             `json:"resumed,omitempty"`
 	State            string           `json:"state"`
 }
 
 type ArtifactResult struct {
-	DiagnosticCode string `json:"diagnostic_code,omitempty"`
-	Filename       string `json:"filename"`
-	PackageName    string `json:"package_name,omitempty"`
-	PackageVersion string `json:"package_version,omitempty"`
-	State          string `json:"state"`
+	DiagnosticCode  string           `json:"diagnostic_code,omitempty"`
+	Filename        string           `json:"filename"`
+	PackageName     string           `json:"package_name,omitempty"`
+	PackageVersion  string           `json:"package_version,omitempty"`
+	PublishApproval *PublishApproval `json:"publish_approval,omitempty"`
+	State           string           `json:"state"`
 }
 
 type StatusError struct {
@@ -390,7 +418,68 @@ func Run(ctx context.Context, config Config, paths []string, deps Dependencies, 
 	if result.State == "error" {
 		return result, resolved, publishStatusError(status)
 	}
-	return result, resolved, nil
+	return result, resolved, reportPublishApproval(result, reporter)
+}
+
+// reportPublishApproval says which versions publish approval holds. A version
+// awaiting approval is a successful publish; a rejected Run is not.
+func reportPublishApproval(result Result, reporter io.Writer) error {
+	var rejected []string
+	for _, held := range heldVersions(result) {
+		switch held.approval.State {
+		case PublishApprovalAwaiting:
+			if _, err := fmt.Fprintf(reporter, "%s is waiting for an Organization Admin's approval: %s\n", held.label, held.approval.link()); err != nil {
+				return err
+			}
+		case PublishApprovalRejected:
+			rejected = append(rejected, fmt.Sprintf("%s will not be published: an Organization Admin rejected its Run: %s", held.label, held.approval.link()))
+		}
+	}
+	if len(rejected) == 0 {
+		return nil
+	}
+	message := strings.Join(rejected, "\n")
+	if rejectedRunFailsPublish {
+		return errors.New(message)
+	}
+	_, err := fmt.Fprintln(reporter, message)
+	return err
+}
+
+type heldVersion struct {
+	approval PublishApproval
+	label    string
+}
+
+// heldVersions lists each held package version once: a wheel and an sdist of
+// one release share a single approval.
+func heldVersions(result Result) []heldVersion {
+	var held []heldVersion
+	seen := map[string]bool{}
+	for _, artifact := range result.Artifacts {
+		approval := artifact.PublishApproval
+		if approval == nil {
+			approval = result.PublishApproval
+		}
+		if approval == nil {
+			continue
+		}
+		label := artifactLabel(artifact)
+		if key := approval.State + " " + label; !seen[key] {
+			seen[key] = true
+			held = append(held, heldVersion{approval: *approval, label: label})
+		}
+	}
+	return held
+}
+
+func artifactLabel(artifact ArtifactResult) string {
+	name := strings.TrimSpace(artifact.PackageName)
+	packageVersion := strings.TrimSpace(artifact.PackageVersion)
+	if name == "" || packageVersion == "" {
+		return artifact.Filename
+	}
+	return name + "@" + packageVersion
 }
 
 type artifactTransferResult struct {
@@ -869,16 +958,18 @@ func sessionArtifactStatuses(artifacts []PlannedArtifact) []ArtifactStatus {
 func resultFromStatus(status PublishSessionStatusResponse, create CreatePublishSessionResponse) Result {
 	result := Result{
 		ArtifactProtocol: create.PublishSession.ArtifactProtocol,
+		PublishApproval:  status.PublishSession.PublishApproval,
 		PublishSessionID: firstNonEmpty(status.PublishSession.ID, create.PublishSession.ID),
 		Resumed:          create.PublishSession.Resumed,
 		State:            firstNonEmpty(status.PublishSession.State, create.PublishSession.State),
 	}
 	for _, artifact := range status.Artifacts {
 		item := ArtifactResult{
-			Filename:       artifact.Artifact.Filename,
-			PackageName:    artifact.Package.Name,
-			PackageVersion: artifact.Package.Version,
-			State:          artifact.State,
+			Filename:        artifact.Artifact.Filename,
+			PackageName:     artifact.Package.Name,
+			PackageVersion:  artifact.Package.Version,
+			PublishApproval: artifact.PublishApproval,
+			State:           artifact.State,
 		}
 		if artifact.Error != nil {
 			item.DiagnosticCode = artifact.Error.Code
