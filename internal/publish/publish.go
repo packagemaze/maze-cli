@@ -251,13 +251,20 @@ type ArtifactResult struct {
 type StatusError struct {
 	StatusCode int
 	Endpoint   string
-	Detail     string
+	// Reason is the message PackageMaze gave in the response's detail; empty
+	// when the response states none.
+	Reason string
+	// Detail is Reason, or else the response body.
+	Detail string
 }
 
 func (e *StatusError) Error() string {
 	detail := strings.TrimSpace(e.Detail)
 	if detail == "" {
 		detail = http.StatusText(e.StatusCode)
+	}
+	if reason := strings.TrimSpace(e.Reason); e.StatusCode == http.StatusForbidden && reason != "" {
+		return fmt.Sprintf("PackageMaze refused the publish: %s", reason)
 	}
 	if e.StatusCode == http.StatusUnauthorized || e.StatusCode == http.StatusForbidden {
 		return fmt.Sprintf("PackageMaze rejected the publish Token for this Feed: %s", detail)
@@ -1148,10 +1155,12 @@ func (c *HTTPClient) doJSONBytes(ctx context.Context, method string, endpoint st
 	}
 	defer response.Body.Close()
 	if !containsStatus(expectedStatuses, response.StatusCode) {
+		reason, detail := responseDetail(response.Body)
 		return &StatusError{
 			StatusCode: response.StatusCode,
 			Endpoint:   endpoint,
-			Detail:     responseDetail(response.Body),
+			Reason:     reason,
+			Detail:     detail,
 		}
 	}
 	if out == nil {
@@ -1172,10 +1181,12 @@ func containsStatus(values []int, expected int) bool {
 	return false
 }
 
-func responseDetail(reader io.Reader) string {
+// responseDetail returns the reason PackageMaze stated in detail (a string or
+// detail.message), and the text to show: that reason, or else the body.
+func responseDetail(reader io.Reader) (string, string) {
 	content, err := io.ReadAll(io.LimitReader(reader, 64*1024))
 	if err != nil {
-		return ""
+		return "", ""
 	}
 	var payload struct {
 		Detail any `json:"detail"`
@@ -1183,12 +1194,12 @@ func responseDetail(reader io.Reader) string {
 	if err := json.Unmarshal(content, &payload); err == nil {
 		switch detail := payload.Detail.(type) {
 		case string:
-			return detail
+			return detail, detail
 		case map[string]any:
 			if message, ok := detail["message"].(string); ok {
-				return message
+				return message, message
 			}
 		}
 	}
-	return strings.TrimSpace(string(content))
+	return "", strings.TrimSpace(string(content))
 }
