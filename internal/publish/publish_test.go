@@ -673,6 +673,65 @@ func TestHTTPClientDoesNotRetryRejectedCreate(t *testing.T) {
 	}
 }
 
+func TestHTTPClientReportsRefusedPublishReason(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		status int
+		body   string
+		want   string
+	}{
+		{
+			name:   "403 with a detail reason",
+			status: http.StatusForbidden,
+			body:   `{"detail":"This Feed accepts publishes only from approved CI jobs.","error":"This Feed accepts publishes only from approved CI jobs."}`,
+			want:   "PackageMaze refused the publish: This Feed accepts publishes only from approved CI jobs.",
+		},
+		{
+			name:   "403 with a detail message",
+			status: http.StatusForbidden,
+			body:   `{"detail":{"code":"publish_refused","message":"Publishing to this Feed is paused."}}`,
+			want:   "PackageMaze refused the publish: Publishing to this Feed is paused.",
+		},
+		{
+			name:   "403 without a reason",
+			status: http.StatusForbidden,
+			body:   `{"error":"forbidden"}`,
+			want:   `PackageMaze rejected the publish Token for this Feed: {"error":"forbidden"}`,
+		},
+		{
+			name:   "401 with a detail reason",
+			status: http.StatusUnauthorized,
+			body:   `{"detail":"The Token has expired."}`,
+			want:   "PackageMaze rejected the publish Token for this Feed: The Token has expired.",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			requests := 0
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				requests++
+				writer.Header().Set("Content-Type", "application/json")
+				writer.WriteHeader(test.status)
+				_, _ = io.WriteString(writer, test.body)
+			}))
+			defer server.Close()
+			client := NewClient(server.URL, true, server.Client())
+
+			_, err := client.CreateSession(context.Background(), "your-org/npm", "secret", CreatePublishSessionRequest{
+				PublicationRequestID: "publication_request_refused",
+			})
+			if err == nil {
+				t.Fatal("CreateSession unexpectedly succeeded")
+			}
+			if got := err.Error(); got != test.want {
+				t.Fatalf("error = %q, want %q", got, test.want)
+			}
+			if requests != 1 {
+				t.Fatalf("create requests = %d", requests)
+			}
+		})
+	}
+}
+
 func TestHTTPClientRetriesAmbiguousCompletionOnceWithExactRequest(t *testing.T) {
 	var bodies [][]byte
 	var versions []string
