@@ -6,7 +6,8 @@
     "package": null,
     "audience": "https://api.packagemaze.com",
     "oidc_token": "fixture-oidc-token",
-    "setup_invocation_id": "setup-maze_0123456789abcdef0123456789abcdef"
+    "setup_invocation_id": "setup-maze_0123456789abcdef0123456789abcdef",
+    "retry_secret": "fixture-retry-secret_0123456789abcdefABCDEF"
   },
   "success": {
     "token": "maze_ci_fixture_token",

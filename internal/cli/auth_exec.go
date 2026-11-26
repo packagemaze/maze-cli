@@ -88,6 +88,7 @@ func newAuthExecCommand(deps auth.Dependencies, execDeps execDependencies) *cobr
 				runDeps.Env = auth.DefaultDependencies().Env
 			}
 			runDeps.Stdin = cmd.InOrStdin()
+			runDeps.Stderr = cmd.ErrOrStderr()
 			return runAuthExec(cmd, config, runDeps, execDeps, args)
 		},
 	}

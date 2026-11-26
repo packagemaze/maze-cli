@@ -40,15 +40,18 @@ type execHarness struct {
 	t        *testing.T
 	root     string
 	response string
+	failures []func(http.ResponseWriter)
+	clock    *testClock
 	exit     int
 	signal   os.Signal
 	child    *childRun
 	stopped  bool
 	exchange string
+	bodies   []string
 }
 
 func newExecHarness(t *testing.T, response string) *execHarness {
-	return &execHarness{t: t, root: t.TempDir(), response: response}
+	return &execHarness{t: t, root: t.TempDir(), response: response, clock: newTestClock()}
 }
 
 func (h *execHarness) dependencies() execDependencies {
@@ -102,15 +105,26 @@ func fileMode(t *testing.T, path string) fs.FileMode {
 	return info.Mode().Perm()
 }
 
-// execute runs maze auth exec against a backend answering h.response.
+// execute runs maze auth exec against a backend answering with each of
+// h.failures, then h.response.
 func (h *execHarness) execute(args ...string) (string, string, error) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		content, _ := io.ReadAll(request.Body)
 		h.exchange = string(content)
+		h.bodies = append(h.bodies, h.exchange)
+		if attempt := len(h.bodies); attempt <= len(h.failures) {
+			h.failures[attempt-1](writer)
+			return
+		}
 		_, _ = io.WriteString(writer, h.response)
 	}))
 	defer server.Close()
-	deps := auth.Dependencies{Env: mapLookup(map[string]string{"MAZE_OIDC_TOKEN": "platform-identity"}), HTTPClient: server.Client()}
+	deps := auth.Dependencies{
+		Env:        mapLookup(map[string]string{"MAZE_OIDC_TOKEN": "platform-identity"}),
+		HTTPClient: server.Client(),
+		Now:        h.clock.Now,
+		Sleep:      h.clock.Sleep,
+	}
 	root := &cobra.Command{Use: "maze", SilenceUsage: true, SilenceErrors: true}
 	authCommand := &cobra.Command{Use: "auth"}
 	authCommand.AddCommand(newAuthExecCommand(deps, h.dependencies()))
@@ -178,6 +192,40 @@ func TestAuthExecRunsTheCommandWithNpmFeedConfiguration(t *testing.T) {
 		t.Fatalf("exchange = %s", h.exchange)
 	}
 	h.assertWorkspaceRemoved()
+}
+
+func TestAuthExecResendsTheIdenticalExchangeBeforeRunningTheCommand(t *testing.T) {
+	h := newExecHarness(t, execOneFeedResponse)
+	h.failures = []func(http.ResponseWriter){dropConnection, answer(http.StatusServiceUnavailable, "3", ""), truncatedToken}
+	stdout, stderr, err := h.execute("--feed", "acme/npm", "--purpose", "install", "--", "npm", "ci")
+	if err != nil {
+		t.Fatalf("command returned error: %v\nstderr: %s", err, stderr)
+	}
+	secret := assertOneRequestResent(t, h.bodies, 4)
+	if !strings.Contains(h.bodies[0], `"oidc_token":"platform-identity"`) || h.child == nil || h.child.env["MAZE_TOKEN"] != execToken {
+		t.Fatalf("exchange = %s, child = %+v", h.bodies[0], h.child)
+	}
+	wantStderr := "PackageMaze gave no readable answer; retrying the token exchange in 1s\n" +
+		"PackageMaze answered HTTP 503; retrying the token exchange in 3s\n" +
+		"PackageMaze gave no readable answer; retrying the token exchange in 4s\n"
+	if stderr != wantStderr || stdout != "" {
+		t.Fatalf("stdout = %q, stderr = %q", stdout, stderr)
+	}
+	for _, value := range append(append([]string{h.child.spec.Path}, h.child.spec.Args...), h.child.spec.Env...) {
+		if strings.Contains(value, secret) {
+			t.Fatalf("the retry secret reached the command")
+		}
+	}
+	h.assertWorkspaceRemoved()
+}
+
+func TestAuthExecStopsAtAReplayedIdentityWithoutRunningTheCommand(t *testing.T) {
+	h := newExecHarness(t, execOneFeedResponse)
+	h.failures = []func(http.ResponseWriter){answer(http.StatusConflict, "", replayedRefusal)}
+	_, stderr, err := h.execute("--feed", "acme/npm", "--purpose", "install", "--", "npm", "ci")
+	if err == nil || !strings.Contains(err.Error(), "oidc_assertion_replayed") || len(h.bodies) != 1 || h.child != nil || stderr != "" {
+		t.Fatalf("err = %v, exchanges = %d, ran = %v, stderr = %q", err, len(h.bodies), h.child != nil, stderr)
+	}
 }
 
 func TestAuthExecSeveralFeedsConfiguresEachArtifactProtocol(t *testing.T) {

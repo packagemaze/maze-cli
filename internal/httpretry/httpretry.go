@@ -2,6 +2,7 @@
 package httpretry
 
 import (
+	"crypto/tls"
 	"errors"
 	"io"
 	"math"
@@ -12,6 +13,13 @@ import (
 	"syscall"
 	"time"
 )
+
+// CertificateFailure reports a server certificate the client refused. Retrying will not fix it,
+// and it may mean the connection is intercepted.
+func CertificateFailure(err error) bool {
+	certificate := new(tls.CertificateVerificationError)
+	return errors.As(err, &certificate)
+}
 
 // ConnectionDropped reports a connection that timed out, reset or closed mid-exchange: the
 // request may have reached the server. DNS, TLS, refused connections and cancellation are not.

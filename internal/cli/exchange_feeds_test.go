@@ -15,7 +15,7 @@ func TestExchangeOIDCOneFeedRequestBodyIsUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("command returned error: %v", err)
 	}
-	want := `{"provider":"manual","feed":"your-org/npm","purpose":"install","package":null,"audience":"https://api.packagemaze.com","oidc_token":"manual-oidc"}`
+	want := `{"provider":"manual","feed":"your-org/npm","purpose":"install","package":null,"audience":"https://api.packagemaze.com","oidc_token":"manual-oidc","retry_secret":"<retry-secret>"}`
 	if body != want {
 		t.Fatalf("request body = %s\nwant           %s", body, want)
 	}
@@ -28,7 +28,7 @@ func TestExchangeOIDCSeveralFeedsSendsFeedsAndPrintsTheToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("command returned error: %v", err)
 	}
-	want := `{"provider":"manual","purpose":"install","package":null,"audience":"https://api.packagemaze.com","oidc_token":"manual-oidc","feeds":["acme/npm","acme/pypi"]}`
+	want := `{"provider":"manual","purpose":"install","package":null,"audience":"https://api.packagemaze.com","oidc_token":"manual-oidc","feeds":["acme/npm","acme/pypi"],"retry_secret":"<retry-secret>"}`
 	if body != want {
 		t.Fatalf("request body = %s\nwant           %s", body, want)
 	}
@@ -90,7 +90,8 @@ func TestExchangeOIDCSeveralFeedsRefusalNamesEveryFeed(t *testing.T) {
 }
 
 // runExchange runs an exchange against a server that answers with the
-// given status and body, and returns stdout and the request body it received.
+// given status and body, and returns stdout and the request body it received,
+// its retry secret masked.
 func runExchange(t *testing.T, status int, response string, args ...string) (string, string, error) {
 	t.Helper()
 	var body string
@@ -105,5 +106,5 @@ func runExchange(t *testing.T, status int, response string, args ...string) (str
 		auth.Dependencies{Env: mapLookup(map[string]string{"MAZE_OIDC_TOKEN": "manual-oidc"}), HTTPClient: server.Client()},
 		append([]string{"auth", "exchange-oidc", "--provider", "manual", "--api-url", server.URL, "--allow-insecure-localhost"}, args...)...,
 	)
-	return stdout, body, err
+	return stdout, maskRetrySecret(t, body), err
 }

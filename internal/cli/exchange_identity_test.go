@@ -22,7 +22,8 @@ type exchangeRun struct {
 }
 
 // runIdentityExchange runs exchange-oidc with no --provider against a server
-// answering with response, and records what the server received.
+// answering with response, and records what the server received, its retry
+// secret masked.
 func runIdentityExchange(t *testing.T, env map[string]string, stdin string, response string, args ...string) exchangeRun {
 	t.Helper()
 	var run exchangeRun
@@ -42,6 +43,7 @@ func runIdentityExchange(t *testing.T, env map[string]string, stdin string, resp
 	command.SetArgs(append([]string{"auth", "exchange-oidc", "--api-url", server.URL, "--allow-insecure-localhost"}, args...))
 	run.err = command.Execute()
 	run.stdout, run.stderr = stdout.String(), stderr.String()
+	run.body = maskRetrySecret(t, run.body)
 	return run
 }
 
@@ -51,7 +53,7 @@ func TestExchangeOIDCSuppliedTokenNamesNoProvider(t *testing.T) {
 	if run.err != nil {
 		t.Fatalf("command returned error: %v", run.err)
 	}
-	want := `{"feed":"acme/npm","purpose":"install","package":null,"audience":"https://api.packagemaze.com","oidc_token":"platform-oidc"}`
+	want := `{"feed":"acme/npm","purpose":"install","package":null,"audience":"https://api.packagemaze.com","oidc_token":"platform-oidc","retry_secret":"<retry-secret>"}`
 	if run.body != want {
 		t.Fatalf("request body = %s\nwant           %s", run.body, want)
 	}
@@ -69,7 +71,7 @@ func TestExchangeOIDCInjectedIdentitySendsNoTokenProviderOrAuthorization(t *test
 	if run.err != nil {
 		t.Fatalf("command returned error: %v", run.err)
 	}
-	want := `{"feed":"acme/npm","purpose":"install","package":null,"audience":"https://api.packagemaze.com"}`
+	want := `{"feed":"acme/npm","purpose":"install","package":null,"audience":"https://api.packagemaze.com","retry_secret":"<retry-secret>"}`
 	if run.body != want {
 		t.Fatalf("request body = %s\nwant           %s", run.body, want)
 	}

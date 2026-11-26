@@ -13,7 +13,7 @@ func TestExchangeOIDCPublishWithPackageRequestBodyIsUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("command returned error: %v", err)
 	}
-	want := `{"provider":"manual","feed":"your-org/npm","purpose":"publish","package":"your-package","audience":"https://api.packagemaze.com","oidc_token":"manual-oidc"}`
+	want := `{"provider":"manual","feed":"your-org/npm","purpose":"publish","package":"your-package","audience":"https://api.packagemaze.com","oidc_token":"manual-oidc","retry_secret":"<retry-secret>"}`
 	if body != want {
 		t.Fatalf("request body = %s\nwant           %s", body, want)
 	}
@@ -24,7 +24,7 @@ func TestExchangeOIDCPublishWithoutPackageSendsANullPackageAsInstallDoes(t *test
 	if err != nil {
 		t.Fatalf("command returned error: %v", err)
 	}
-	want := `{"provider":"manual","feed":"your-org/npm","purpose":"publish","package":null,"audience":"https://api.packagemaze.com","oidc_token":"manual-oidc"}`
+	want := `{"provider":"manual","feed":"your-org/npm","purpose":"publish","package":null,"audience":"https://api.packagemaze.com","oidc_token":"manual-oidc","retry_secret":"<retry-secret>"}`
 	if body != want {
 		t.Fatalf("request body = %s\nwant           %s", body, want)
 	}
