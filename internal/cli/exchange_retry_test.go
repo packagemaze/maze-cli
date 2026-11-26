@@ -134,11 +134,11 @@ func assertOneRequestResent(t *testing.T, bodies []string, attempts int) string 
 
 func TestExchangeOIDCResendsTheIdenticalRequestThroughRetryableFailures(t *testing.T) {
 	backend := &scriptedBackend{answers: []func(http.ResponseWriter){
+		answer(http.StatusTooManyRequests, "7", `{"detail":"Slow down."}`),
 		dropConnection,
 		answer(http.StatusBadGateway, "", ""),
 		answer(http.StatusServiceUnavailable, "", ""),
 		answer(http.StatusGatewayTimeout, "", ""),
-		answer(http.StatusTooManyRequests, "7", `{"detail":"Slow down."}`),
 		truncatedToken,
 		answer(http.StatusOK, "", oneFeedResponse),
 	}}
@@ -151,16 +151,16 @@ func TestExchangeOIDCResendsTheIdenticalRequestThroughRetryableFailures(t *testi
 	if !strings.Contains(backend.bodies[0], `"oidc_token":"platform-identity"`) {
 		t.Fatalf("request body = %s", backend.bodies[0])
 	}
-	want := []time.Duration{2 * time.Second, 2 * time.Second, 2 * time.Second, 2 * time.Second, 7 * time.Second, 2 * time.Second}
+	want := []time.Duration{7 * time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 15 * time.Second, 15 * time.Second}
 	if !reflect.DeepEqual(clock.waits, want) {
 		t.Fatalf("waits = %v, want %v", clock.waits, want)
 	}
-	wantStderr := "PackageMaze gave no readable answer; retrying the token exchange in 2s\n" +
-		"PackageMaze answered HTTP 502; retrying the token exchange in 2s\n" +
-		"PackageMaze answered HTTP 503; retrying the token exchange in 2s\n" +
-		"PackageMaze answered HTTP 504; retrying the token exchange in 2s\n" +
-		"PackageMaze answered HTTP 429; retrying the token exchange in 7s\n" +
+	wantStderr := "PackageMaze answered HTTP 429; retrying the token exchange in 7s\n" +
 		"PackageMaze gave no readable answer; retrying the token exchange in 2s\n" +
+		"PackageMaze answered HTTP 502; retrying the token exchange in 4s\n" +
+		"PackageMaze answered HTTP 503; retrying the token exchange in 8s\n" +
+		"PackageMaze answered HTTP 504; retrying the token exchange in 15s\n" +
+		"PackageMaze gave no readable answer; retrying the token exchange in 15s\n" +
 		"PackageMaze OIDC exchange provider: none named; the supplied identity token's issuer selects it\n"
 	if stderr != wantStderr {
 		t.Fatalf("stderr =\n%s\nwant\n%s", stderr, wantStderr)
@@ -204,7 +204,7 @@ func TestExchangeOIDCInjectedIdentityResendsTheSameBody(t *testing.T) {
 	if strings.Contains(backend.bodies[0], "oidc_token") || !reflect.DeepEqual(backend.authorizations, []string{"", ""}) {
 		t.Fatalf("maze sent an identity: %s, Authorization %q", backend.bodies[0], backend.authorizations)
 	}
-	if stdout != "maze_ci_real\n" || stderr != "PackageMaze gave no readable answer; retrying the token exchange in 2s\n" || strings.Contains(stdout+stderr, secret) {
+	if stdout != "maze_ci_real\n" || stderr != "PackageMaze gave no readable answer; retrying the token exchange in 1s\n" || strings.Contains(stdout+stderr, secret) {
 		t.Fatalf("stdout = %q, stderr = %q", stdout, stderr)
 	}
 }

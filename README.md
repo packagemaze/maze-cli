@@ -191,10 +191,11 @@ PackageMaze answers 429, 502, 503 or 504, `maze` resends the identical
 request with the same identity token and secret, and PackageMaze revokes the
 Token the first attempt minted and returns a new one. Any other answer, such
 as `oidc_assertion_replayed`, ends the exchange with PackageMaze's error.
-`maze` honors `Retry-After`, prints one line per retry on stderr, and stops
-retrying at the identity token's `exp`, or 60 seconds after the first attempt
-when it cannot read `exp` or the platform injects the token. `maze auth exec`
-retries the same way. `retry_secret` needs a PackageMaze server that accepts
+`maze` waits 1, 2, 4, 8, then 15 seconds between attempts, or longer when
+`Retry-After` asks, and prints one line per retry on stderr. It stops
+retrying at the identity token's `exp` or 2 minutes after the first attempt,
+whichever is sooner; 2 minutes when it cannot read `exp` or the platform
+injects the token. `maze auth exec` retries the same way. `retry_secret` needs a PackageMaze server that accepts
 it.
 
 `--oidc-token-file`, `--oidc-token-stdin`, and `--oidc-token-env` are the

@@ -130,14 +130,14 @@ func TestExchangeResendsTheIdenticalRequestOnARetryableFailure(t *testing.T) {
 		wantWait time.Duration
 		wantLine string
 	}{
-		{"no answer", unanswered(), 2 * time.Second, "PackageMaze gave no readable answer; retrying the token exchange in 2s\n"},
-		{"unreadable 2xx", &api.MalformedResponseError{Err: io.ErrUnexpectedEOF}, 2 * time.Second, "PackageMaze gave no readable answer; retrying the token exchange in 2s\n"},
-		{"502", status(http.StatusBadGateway, ""), 2 * time.Second, "PackageMaze answered HTTP 502; retrying the token exchange in 2s\n"},
-		{"503", status(http.StatusServiceUnavailable, ""), 2 * time.Second, "PackageMaze answered HTTP 503; retrying the token exchange in 2s\n"},
-		{"504", status(http.StatusGatewayTimeout, ""), 2 * time.Second, "PackageMaze answered HTTP 504; retrying the token exchange in 2s\n"},
+		{"no answer", unanswered(), time.Second, "PackageMaze gave no readable answer; retrying the token exchange in 1s\n"},
+		{"unreadable 2xx", &api.MalformedResponseError{Err: io.ErrUnexpectedEOF}, time.Second, "PackageMaze gave no readable answer; retrying the token exchange in 1s\n"},
+		{"502", status(http.StatusBadGateway, ""), time.Second, "PackageMaze answered HTTP 502; retrying the token exchange in 1s\n"},
+		{"503", status(http.StatusServiceUnavailable, ""), time.Second, "PackageMaze answered HTTP 503; retrying the token exchange in 1s\n"},
+		{"504", status(http.StatusGatewayTimeout, ""), time.Second, "PackageMaze answered HTTP 504; retrying the token exchange in 1s\n"},
 		{"429 with Retry-After seconds", status(http.StatusTooManyRequests, "7"), 7 * time.Second, "PackageMaze answered HTTP 429; retrying the token exchange in 7s\n"},
 		{"503 with a Retry-After date", status(http.StatusServiceUnavailable, clockStart.Add(30*time.Second).Format(http.TimeFormat)), 30 * time.Second, "PackageMaze answered HTTP 503; retrying the token exchange in 30s\n"},
-		{"Retry-After sooner than the delay", status(http.StatusServiceUnavailable, "0"), 2 * time.Second, "PackageMaze answered HTTP 503; retrying the token exchange in 2s\n"},
+		{"Retry-After sooner than the delay", status(http.StatusServiceUnavailable, "0"), time.Second, "PackageMaze answered HTTP 503; retrying the token exchange in 1s\n"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -184,7 +184,32 @@ func TestExchangeDoesNotRetryARefusal(t *testing.T) {
 	}
 }
 
-func TestExchangeStopsRetryingAtTheIdentityTokenExpiry(t *testing.T) {
+func TestExchangeBacksOffExponentiallyUpTo15Seconds(t *testing.T) {
+	sevenLost := []error{unanswered(), unanswered(), unanswered(), unanswered(), unanswered(), unanswered(), unanswered()}
+	tests := []struct {
+		name      string
+		errs      []error
+		wantWaits []time.Duration
+	}{
+		{"doubling up to the cap", sevenLost, []time.Duration{1 * time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 15 * time.Second, 15 * time.Second, 15 * time.Second}},
+		{"a longer Retry-After wins", []error{unanswered(), status(http.StatusServiceUnavailable, "3"), unanswered(), status(http.StatusTooManyRequests, "20"), status(http.StatusBadGateway, "1")},
+			[]time.Duration{1 * time.Second, 3 * time.Second, 4 * time.Second, 20 * time.Second, 15 * time.Second}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			clock := newTestClock()
+			run := runRetry(&scriptedExchanger{errs: test.errs}, identityTokenExpiring(clock.now.Add(time.Hour)), clock)
+			if run.err != nil || len(run.exchanger.requests) != len(test.errs)+1 {
+				t.Fatalf("err = %v, requests = %d", run.err, len(run.exchanger.requests))
+			}
+			if !reflect.DeepEqual(run.clock.waits, test.wantWaits) {
+				t.Fatalf("waits = %v, want %v", run.clock.waits, test.wantWaits)
+			}
+		})
+	}
+}
+
+func TestExchangeStopsRetryingAtAnIdentityTokenExpiryBeforeTwoMinutes(t *testing.T) {
 	start := newTestClock().now
 	tests := []struct {
 		name         string
@@ -193,10 +218,10 @@ func TestExchangeStopsRetryingAtTheIdentityTokenExpiry(t *testing.T) {
 		wantRequests int
 		wantWaited   time.Duration
 	}{
-		{"no time for another attempt", start.Add(5 * time.Second), status(http.StatusServiceUnavailable, ""), 3, 4 * time.Second},
-		{"Retry-After past the expiry", start.Add(10 * time.Minute), status(http.StatusServiceUnavailable, "3600"), 1, 0},
+		{"no time for another attempt", start.Add(5 * time.Second), status(http.StatusServiceUnavailable, ""), 3, 3 * time.Second},
+		{"Retry-After past the expiry", start.Add(time.Minute), status(http.StatusServiceUnavailable, "3600"), 1, 0},
 		{"already expired", start.Add(-time.Minute), unanswered(), 1, 0},
-		{"an expiry later than 60 seconds", start.Add(5 * time.Minute), unanswered(), 150, 298 * time.Second},
+		{"an earlier expiry beats the 2-minute cap", start.Add(90 * time.Second), unanswered(), 9, 75 * time.Second},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -211,17 +236,18 @@ func TestExchangeStopsRetryingAtTheIdentityTokenExpiry(t *testing.T) {
 	}
 }
 
-func TestExchangeStopsRetryingAfterSixtySecondsWhenTheExpiryIsUnknown(t *testing.T) {
+func TestExchangeStopsRetryingTwoMinutesAfterTheFirstAttempt(t *testing.T) {
 	for name, identityToken := range map[string]string{
-		"not a JWT":         "platform-identity",
-		"no exp claim":      identityTokenWithClaims(`{"iss":"https://ci.example"}`),
-		"exp not a number":  identityTokenWithClaims(`{"exp":"tomorrow"}`),
-		"injected identity": "",
+		"the cap beats a later expiry": identityTokenExpiring(newTestClock().now.Add(time.Hour)),
+		"not a JWT":                    "platform-identity",
+		"no exp claim":                 identityTokenWithClaims(`{"iss":"https://ci.example"}`),
+		"exp not a number":             identityTokenWithClaims(`{"exp":"tomorrow"}`),
+		"injected identity":            "",
 	} {
 		t.Run(name, func(t *testing.T) {
 			run := runRetry(&scriptedExchanger{always: unanswered()}, identityToken, newTestClock())
 			requests := run.exchanger.requests
-			if len(requests) != 30 || run.clock.waited() != 58*time.Second {
+			if len(requests) != 11 || run.clock.waited() != 105*time.Second {
 				t.Fatalf("requests = %d, waited = %v", len(requests), run.clock.waited())
 			}
 			for _, request := range requests {
@@ -229,10 +255,10 @@ func TestExchangeStopsRetryingAfterSixtySecondsWhenTheExpiryIsUnknown(t *testing
 					t.Fatalf("a retry changed the request: %#v", request)
 				}
 			}
-			if !errors.Is(run.err, api.ErrUnanswered) || !strings.Contains(run.err.Error(), "the next attempt would come more than 60 seconds after the first attempt; the last attempt failed: ") {
+			if !errors.Is(run.err, api.ErrUnanswered) || !strings.HasPrefix(run.err.Error(), "maze stopped retrying the PackageMaze token exchange because the next attempt would come more than 2 minutes after the first attempt; the last attempt failed: ") {
 				t.Fatalf("err = %v", run.err)
 			}
-			if strings.Count(run.stderr, "\n") != 29 || strings.Contains(run.stderr, requests[0].RetrySecret) {
+			if strings.Count(run.stderr, "\n") != 10 || strings.Contains(run.stderr, requests[0].RetrySecret) {
 				t.Fatalf("stderr = %q", run.stderr)
 			}
 		})

@@ -205,9 +205,9 @@ func TestAuthExecResendsTheIdenticalExchangeBeforeRunningTheCommand(t *testing.T
 	if !strings.Contains(h.bodies[0], `"oidc_token":"platform-identity"`) || h.child == nil || h.child.env["MAZE_TOKEN"] != execToken {
 		t.Fatalf("exchange = %s, child = %+v", h.bodies[0], h.child)
 	}
-	wantStderr := "PackageMaze gave no readable answer; retrying the token exchange in 2s\n" +
+	wantStderr := "PackageMaze gave no readable answer; retrying the token exchange in 1s\n" +
 		"PackageMaze answered HTTP 503; retrying the token exchange in 3s\n" +
-		"PackageMaze gave no readable answer; retrying the token exchange in 2s\n"
+		"PackageMaze gave no readable answer; retrying the token exchange in 4s\n"
 	if stderr != wantStderr || stdout != "" {
 		t.Fatalf("stdout = %q, stderr = %q", stdout, stderr)
 	}

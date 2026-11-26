@@ -17,10 +17,11 @@ import (
 )
 
 const (
-	retryDelay = 2 * time.Second
-	// unknownExpiryRetryLimit bounds retries when maze cannot read the identity
-	// token's exp, or never sees the token because the platform injects it.
-	unknownExpiryRetryLimit = 60 * time.Second
+	firstRetryDelay = time.Second
+	maxRetryDelay   = 15 * time.Second
+	// retryWindow ends retries 2 minutes after the first attempt, or sooner
+	// when the identity token expires first.
+	retryWindow = 2 * time.Minute
 )
 
 // newRetrySecret is 32 random bytes, base64url without padding.
@@ -57,12 +58,12 @@ func newRetrier(deps Dependencies) retrier {
 // oidc_assertion_replayed, which is final.
 func (r retrier) exchange(ctx context.Context, exchanger TokenExchanger, request api.CITokenRequest) (api.CITokenResponse, error) {
 	bound := retryBoundFor(request.OIDCToken, r.now())
-	for {
+	for delay := firstRetryDelay; ; delay = min(2*delay, maxRetryDelay) {
 		response, err := exchanger.ExchangeCI(ctx, request)
 		if err == nil {
 			return response, nil
 		}
-		wait, retry := retryWait(err, r.now())
+		wait, retry := retryWait(err, delay, r.now())
 		if !retry {
 			return api.CITokenResponse{}, err
 		}
@@ -76,12 +77,12 @@ func (r retrier) exchange(ctx context.Context, exchanger TokenExchanger, request
 	}
 }
 
-// retryWait is how long to wait before resending: a request with no readable
-// answer, or 429, 502, 503 and 504, honoring Retry-After. Any other answer,
-// and a certificate failure, is final.
-func retryWait(err error, now time.Time) (time.Duration, bool) {
+// retryWait is how long to wait before resending: delay, or a longer
+// Retry-After, after a request with no readable answer, or 429, 502, 503 and
+// 504. Any other answer, and a certificate failure, is final.
+func retryWait(err error, delay time.Duration, now time.Time) (time.Duration, bool) {
 	if errors.Is(err, api.ErrUnanswered) {
-		return retryDelay, true
+		return delay, true
 	}
 	var status *api.StatusError
 	if !errors.As(err, &status) {
@@ -90,7 +91,7 @@ func retryWait(err error, now time.Time) (time.Duration, bool) {
 	switch status.StatusCode {
 	case http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
 		retryAfter, _ := httpretry.RetryAfter(status.RetryAfter, now)
-		return max(retryDelay, retryAfter), true
+		return max(delay, retryAfter), true
 	default:
 		return 0, false
 	}
@@ -109,13 +110,14 @@ type retryBound struct {
 	reason   string
 }
 
-// retryBoundFor ends retries when the identity token expires: PackageMaze
-// would refuse it after that anyway.
-func retryBoundFor(identityToken string, now time.Time) retryBound {
-	if expiresAt, ok := identityExpiry(identityToken); ok {
+// retryBoundFor ends retries at the retry window, or sooner when the identity
+// token expires: PackageMaze would refuse it after that anyway.
+func retryBoundFor(identityToken string, firstAttempt time.Time) retryBound {
+	window := retryBound{deadline: firstAttempt.Add(retryWindow), reason: "more than 2 minutes after the first attempt"}
+	if expiresAt, ok := identityExpiry(identityToken); ok && expiresAt.Before(window.deadline) {
 		return retryBound{deadline: expiresAt, reason: "after the identity token expires"}
 	}
-	return retryBound{deadline: now.Add(unknownExpiryRetryLimit), reason: "more than 60 seconds after the first attempt"}
+	return window
 }
 
 // identityExpiry reads the identity token's exp claim without verifying the
