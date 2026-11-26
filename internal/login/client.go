@@ -3,7 +3,6 @@ package login
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -169,7 +168,7 @@ func requestFailed(ctx context.Context, err error) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	if certificate := new(tls.CertificateVerificationError); errors.As(err, &certificate) {
+	if httpretry.CertificateFailure(err) {
 		return fmt.Errorf("PackageMaze request failed: %w", err)
 	}
 	return fmt.Errorf("%w: %w", errUnanswered, err)

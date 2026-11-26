@@ -2,11 +2,13 @@ package httpretry
 
 import (
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"syscall"
 	"testing"
 	"time"
@@ -21,6 +23,18 @@ func TestConnectionDroppedOnlyWhenTheRequestMayHaveArrived(t *testing.T) {
 	for _, err := range []error{context.Canceled, &net.DNSError{Err: "no such host", Name: "x.test"}, x509.UnknownAuthorityError{}, syscall.ECONNREFUSED, errors.New("other")} {
 		if ConnectionDropped(err) {
 			t.Fatalf("%v: dropped", err)
+		}
+	}
+}
+
+func TestCertificateFailureOnlyForARefusedCertificate(t *testing.T) {
+	refused := &url.Error{Op: "Post", URL: "https://api.packagemaze.test", Err: &tls.CertificateVerificationError{Err: x509.UnknownAuthorityError{}}}
+	if !CertificateFailure(refused) {
+		t.Fatalf("%v: not a certificate failure", refused)
+	}
+	for _, err := range []error{io.EOF, syscall.ECONNRESET, &net.DNSError{Err: "no such host", Name: "x.test"}, errors.New("tls: handshake failure")} {
+		if CertificateFailure(err) {
+			t.Fatalf("%v: a certificate failure", err)
 		}
 	}
 }

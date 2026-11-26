@@ -184,6 +184,19 @@ does not. On CircleCI an environment token replaces `circleci run oidc get`.
 The token never appears in arguments or output. PackageMaze accepts an
 identity token once, so request a fresh one for each exchange.
 
+Each exchange carries a `retry_secret`: 32 random bytes `maze` generates for
+it and keeps only in memory. When the answer is lost (the request fails in
+transit, except on a certificate failure, or a 2xx answer cannot be read) or
+PackageMaze answers 429, 502, 503 or 504, `maze` resends the identical
+request with the same identity token and secret, and PackageMaze revokes the
+Token the first attempt minted and returns a new one. Any other answer, such
+as `oidc_assertion_replayed`, ends the exchange with PackageMaze's error.
+`maze` honors `Retry-After`, prints one line per retry on stderr, and stops
+retrying at the identity token's `exp`, or 60 seconds after the first attempt
+when it cannot read `exp` or the platform injects the token. `maze auth exec`
+retries the same way. `retry_secret` needs a PackageMaze server that accepts
+it.
+
 `--oidc-token-file`, `--oidc-token-stdin`, and `--oidc-token-env` are the
 earlier names of these flags. They keep working, and giving both names of one
 flag is an error.

@@ -90,6 +90,7 @@ func newExchangeOIDCCommand(deps auth.Dependencies) *cobra.Command {
 				runDeps.Env = auth.DefaultDependencies().Env
 			}
 			runDeps.Stdin = cmd.InOrStdin()
+			runDeps.Stderr = cmd.ErrOrStderr()
 			if cmd.Flags().Changed("ref") {
 				config.ReportedRef = &reportedRef
 			}

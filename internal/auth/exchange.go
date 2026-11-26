@@ -70,6 +70,11 @@ type Dependencies struct {
 	Exchanger     TokenExchanger
 	LookPath      ci.LookPath
 	CommandRunner ci.CommandRunner
+	// Now and Sleep pace exchange retries; nil uses the real clock.
+	Now   func() time.Time
+	Sleep func(context.Context, time.Duration) error
+	// Stderr gets one line per exchange retry; nil discards them.
+	Stderr io.Writer
 }
 
 type TokenExchanger interface {
@@ -126,13 +131,14 @@ func Exchange(ctx context.Context, config Config, deps Dependencies) (output.Res
 		SetupInvocationID: resolved.SetupInvocationID,
 		Client:            clientContext,
 		Reported:          reportedContext(resolved.Config),
+		RetrySecret:       newRetrySecret(),
 	}
 	if len(resolved.Feeds) == 1 {
 		request.Feed = resolved.Feeds[0]
 	} else {
 		request.Feeds = resolved.Feeds
 	}
-	response, err := exchanger.ExchangeCI(ctx, request)
+	response, err := newRetrier(deps).exchange(ctx, exchanger, request)
 	if err != nil {
 		return output.Result{}, ResolvedConfig{}, err
 	}

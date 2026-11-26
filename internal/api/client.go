@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/packagemaze/maze-cli/internal/httpretry"
 	"github.com/packagemaze/maze-cli/internal/version"
 )
 
@@ -43,6 +44,10 @@ type CITokenRequest struct {
 	// Feeds names several Feeds of one Organization in place of Feed. It needs
 	// a PackageMaze server that accepts it.
 	Feeds []string `json:"feeds,omitempty"`
+	// RetrySecret proves a resent request is the same exchange: PackageMaze
+	// answers the same identity token, secret and request by revoking the
+	// Token it minted for them and minting a new one. It is a credential.
+	RetrySecret string `json:"retry_secret,omitempty"`
 }
 
 type ReportedContext struct {
@@ -66,6 +71,10 @@ type CITokenResponse struct {
 	Feeds json.RawMessage
 }
 
+// ErrUnanswered marks an exchange PackageMaze may or may not have handled: the
+// request failed in transit, or a 2xx answer could not be read.
+var ErrUnanswered = errors.New("PackageMaze did not answer the token exchange")
+
 type StatusError struct {
 	StatusCode int
 	Endpoint   string
@@ -77,6 +86,8 @@ type StatusError struct {
 	Provider   string
 	Feed       string
 	Purpose    string
+	// RetryAfter is the answer's Retry-After header, as sent.
+	RetryAfter string
 }
 
 func (e *StatusError) Error() string {
@@ -172,6 +183,10 @@ func (e *MalformedResponseError) Unwrap() error {
 	return e.Err
 }
 
+func (e *MalformedResponseError) Is(target error) bool {
+	return target == ErrUnanswered
+}
+
 func NewClient(apiURL string, httpClient *http.Client) *Client {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
@@ -198,24 +213,12 @@ func (c *Client) ExchangeCI(ctx context.Context, request CITokenRequest) (CIToke
 
 	response, err := c.httpClient.Do(httpRequest)
 	if err != nil {
-		return CITokenResponse{}, fmt.Errorf("PackageMaze token exchange request failed: %w", err)
+		return CITokenResponse{}, requestFailed(ctx, err)
 	}
 	defer response.Body.Close()
 
-	if response.StatusCode != http.StatusOK {
-		detail := responseDetail(response.Body)
-		return CITokenResponse{}, &StatusError{
-			StatusCode: response.StatusCode,
-			Endpoint:   endpoint,
-			Detail:     redactSecret(detail.Message, request.OIDCToken),
-			Code:       redactSecret(detail.Code, request.OIDCToken),
-			Recovery:   redactSecret(detail.Recovery, request.OIDCToken),
-			SignInID:   redactSecret(detail.SignInID, request.OIDCToken),
-			DetailsURL: redactSecret(detail.DetailsURL, request.OIDCToken),
-			Provider:   request.Provider,
-			Feed:       request.Feed + strings.Join(request.Feeds, ", "),
-			Purpose:    request.Purpose,
-		}
+	if response.StatusCode < 200 || response.StatusCode > 299 {
+		return CITokenResponse{}, statusError(response, endpoint, request)
 	}
 
 	var payload struct {
@@ -271,6 +274,35 @@ func (c *Client) ExchangeCI(ctx context.Context, request CITokenRequest) (CIToke
 		ArtifactProtocol: payload.ArtifactProtocol,
 		Feeds:            payload.Feeds,
 	}, nil
+}
+
+// requestFailed marks a request that failed in transit as unanswered, unless
+// it was cancelled or the server's certificate was refused.
+func requestFailed(ctx context.Context, err error) error {
+	if ctx.Err() != nil || httpretry.CertificateFailure(err) {
+		return fmt.Errorf("PackageMaze token exchange request failed: %w", err)
+	}
+	return fmt.Errorf("%w: %w", ErrUnanswered, err)
+}
+
+func statusError(response *http.Response, endpoint string, request CITokenRequest) *StatusError {
+	detail := responseDetail(response.Body)
+	redact := func(value string) string {
+		return redactSecrets(value, request.OIDCToken, request.RetrySecret)
+	}
+	return &StatusError{
+		StatusCode: response.StatusCode,
+		Endpoint:   endpoint,
+		Detail:     redact(detail.Message),
+		Code:       redact(detail.Code),
+		Recovery:   redact(detail.Recovery),
+		SignInID:   redact(detail.SignInID),
+		DetailsURL: redact(detail.DetailsURL),
+		Provider:   request.Provider,
+		Feed:       request.Feed + strings.Join(request.Feeds, ", "),
+		Purpose:    request.Purpose,
+		RetryAfter: response.Header.Get("Retry-After"),
+	}
 }
 
 func validCIExchangePurpose(value string) bool {
@@ -394,10 +426,11 @@ func validationLocation(value any) string {
 	return strings.Join(location, ".")
 }
 
-func redactSecret(value string, secret string) string {
-	secret = strings.TrimSpace(secret)
-	if secret == "" {
-		return value
+func redactSecrets(value string, secrets ...string) string {
+	for _, secret := range secrets {
+		if secret = strings.TrimSpace(secret); secret != "" {
+			value = strings.ReplaceAll(value, secret, "[redacted]")
+		}
 	}
-	return strings.ReplaceAll(value, secret, "[redacted]")
+	return value
 }

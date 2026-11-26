@@ -38,6 +38,7 @@ func TestCITokenRequestMatchesPackageMazeContractFixture(t *testing.T) {
 		Audience:          "https://api.packagemaze.com",
 		OIDCToken:         "fixture-oidc-token",
 		SetupInvocationID: "setup-maze_0123456789abcdef0123456789abcdef",
+		RetrySecret:       "fixture-retry-secret_0123456789abcdefABCDEF",
 	})
 	if err != nil {
 		t.Fatalf("encode request: %v", err)
@@ -378,8 +379,81 @@ func TestClientExchangeCINetworkError(t *testing.T) {
 		Audience:  "https://api.packagemaze.com",
 		OIDCToken: "oidc-secret",
 	})
-	if err == nil || !strings.Contains(err.Error(), "request failed") {
+	if !errors.Is(err, ErrUnanswered) || !strings.Contains(err.Error(), "did not answer the token exchange") {
 		t.Fatalf("expected network error, got %v", err)
+	}
+}
+
+func TestClientExchangeCIMarksExchangesPackageMazeMayHaveHandled(t *testing.T) {
+	for name, answer := range map[string]func(http.ResponseWriter){
+		"dropped connection": func(writer http.ResponseWriter) {
+			connection, _, _ := http.NewResponseController(writer).Hijack()
+			_ = connection.Close()
+		},
+		"truncated 200": func(writer http.ResponseWriter) {
+			writer.Header().Set("Content-Length", "4096")
+			_, _ = writer.Write([]byte(`{"token":"maze_ci_lost`))
+		},
+		"200 without JSON":   func(writer http.ResponseWriter) { _, _ = writer.Write([]byte("<html>")) },
+		"200 without Token":  func(writer http.ResponseWriter) { _, _ = writer.Write([]byte(`{"expires_at":"2026-06-08T12:30:00Z"}`)) },
+		"204 without a body": func(writer http.ResponseWriter) { writer.WriteHeader(http.StatusNoContent) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) { answer(writer) }))
+			defer server.Close()
+			_, err := NewClient(server.URL, server.Client()).ExchangeCI(context.Background(), CITokenRequest{Feed: "your-org/npm", Purpose: "install"})
+			if !errors.Is(err, ErrUnanswered) {
+				t.Fatalf("err = %v, want it unanswered", err)
+			}
+		})
+	}
+}
+
+func TestClientExchangeCIKeepsRefusalsCertificateFailuresAndCancellationFinal(t *testing.T) {
+	refusing := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Retry-After", "7")
+		writer.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer refusing.Close()
+	_, err := NewClient(refusing.URL, refusing.Client()).ExchangeCI(context.Background(), CITokenRequest{Feed: "your-org/npm", Purpose: "install"})
+	var status *StatusError
+	if !errors.As(err, &status) || status.StatusCode != http.StatusServiceUnavailable || status.RetryAfter != "7" || errors.Is(err, ErrUnanswered) {
+		t.Fatalf("err = %#v", err)
+	}
+
+	untrusted := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Fatal("reached the server") }))
+	defer untrusted.Close()
+	_, err = NewClient(untrusted.URL, &http.Client{}).ExchangeCI(context.Background(), CITokenRequest{Feed: "your-org/npm", Purpose: "install"})
+	if err == nil || errors.Is(err, ErrUnanswered) || !strings.Contains(err.Error(), "request failed") {
+		t.Fatalf("certificate failure: err = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = NewClient(refusing.URL, refusing.Client()).ExchangeCI(ctx, CITokenRequest{Feed: "your-org/npm", Purpose: "install"})
+	if !errors.Is(err, context.Canceled) || errors.Is(err, ErrUnanswered) {
+		t.Fatalf("cancelled: err = %v", err)
+	}
+}
+
+func TestClientExchangeCISendsTheRetrySecretAndNeverEchoesIt(t *testing.T) {
+	const retrySecret = "fixture-retry-secret_0123456789abcdefABCDEF"
+	var body string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		content, _ := io.ReadAll(request.Body)
+		body = string(content)
+		writer.WriteHeader(http.StatusUnprocessableEntity)
+		_, _ = writer.Write([]byte(`{"detail":{"code":"extra_forbidden","message":"Unexpected retry_secret ` + retrySecret + `","recovery":"Remove ` + retrySecret + `"}}`))
+	}))
+	defer server.Close()
+	_, err := NewClient(server.URL, server.Client()).ExchangeCI(context.Background(), CITokenRequest{
+		Feed: "your-org/npm", Purpose: "install", Audience: "https://api.packagemaze.com", OIDCToken: "oidc-secret", RetrySecret: retrySecret,
+	})
+	if !strings.HasSuffix(body, `,"retry_secret":"`+retrySecret+`"}`) {
+		t.Fatalf("body = %s", body)
+	}
+	if err == nil || strings.Contains(err.Error(), retrySecret) || strings.Count(err.Error(), "[redacted]") != 2 {
+		t.Fatalf("err = %v", err)
 	}
 }
 

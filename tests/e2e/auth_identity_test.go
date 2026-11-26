@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -77,6 +78,17 @@ func requireReceived(t *testing.T, received chan receivedExchange) receivedExcha
 	}
 }
 
+// requireRetrySecret is the exchange's retry secret: 32 random bytes in
+// base64url without padding.
+func requireRetrySecret(t *testing.T, request receivedExchange) string {
+	t.Helper()
+	var secret string
+	if err := json.Unmarshal(request.body["retry_secret"], &secret); err != nil || !regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`).MatchString(secret) {
+		t.Fatalf("retry_secret = %s, want 43 base64url characters", request.body["retry_secret"])
+	}
+	return secret
+}
+
 func TestExchangeOIDCSuppliedIdentityTokenLetsTheIssuerSelectAgainstLocalBackendAPI(t *testing.T) {
 	t.Parallel()
 	const identityToken = "eyJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJodHRwczovL2dpdGxhYi5leGFtcGxlIn0.signature"
@@ -96,6 +108,9 @@ func TestExchangeOIDCSuppliedIdentityTokenLetsTheIssuerSelectAgainstLocalBackend
 	}
 	if strings.Contains(stdout+stderr, identityToken) {
 		t.Fatalf("identity token leaked into output")
+	}
+	if secret := requireRetrySecret(t, request); strings.Contains(stdout+stderr, secret) {
+		t.Fatalf("retry secret leaked into output")
 	}
 	if stderr != "PackageMaze OIDC exchange provider: none named; the supplied identity token's issuer selects it\n" {
 		t.Fatalf("stderr = %q", stderr)
@@ -130,6 +145,7 @@ func TestExchangeOIDCInjectedIdentityAgainstLocalBackendAPI(t *testing.T) {
 	if string(request.body["audience"]) != `"https://api.packagemaze.com"` {
 		t.Fatalf("audience = %s", request.body["audience"])
 	}
+	requireRetrySecret(t, request)
 	if stdout != "maze_ci_fixture_token\n" {
 		t.Fatalf("stdout = %q", stdout)
 	}

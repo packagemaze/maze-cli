@@ -5,8 +5,10 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/packagemaze/maze-cli/internal/api"
 )
@@ -34,6 +36,27 @@ func (exchanger *countingOIDCExchanger) ExchangeCI(_ context.Context, request ap
 		return api.CITokenResponse{}, errors.New("unexpected OIDC token")
 	}
 	return api.CITokenResponse{Token: "maze-token"}, exchanger.err
+}
+
+func TestGitHubActionsIdentityIsFetchedOnceAcrossExchangeRetries(t *testing.T) {
+	gitHubRequests := 0
+	exchanger := &scriptedExchanger{errs: []error{status(http.StatusServiceUnavailable, ""), unanswered()}}
+	clock := newTestClock()
+	_, _, err := Exchange(context.Background(), Config{Feeds: []string{"your-org/npm"}, Purpose: "install"}, Dependencies{
+		Env:        mapLookup(gitHubActionsEnv(nil)),
+		HTTPClient: gitHubTokenClient(&gitHubRequests),
+		Exchanger:  exchanger,
+		Now:        func() time.Time { return clock.now },
+		Sleep:      clock.sleep,
+	})
+	if err != nil || gitHubRequests != 1 || len(exchanger.requests) != 3 {
+		t.Fatalf("err = %v, GitHub token requests = %d, exchanges = %d", err, gitHubRequests, len(exchanger.requests))
+	}
+	for _, request := range exchanger.requests {
+		if !reflect.DeepEqual(request, exchanger.requests[0]) || request.OIDCToken != "github-oidc-token" || request.Provider != "github" {
+			t.Fatalf("a retry changed the request: %#v", request)
+		}
+	}
 }
 
 func TestGitHubOIDCRetryDoesNotReplayExchange(t *testing.T) {
